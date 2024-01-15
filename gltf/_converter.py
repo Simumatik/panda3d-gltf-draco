@@ -10,6 +10,7 @@ import urllib.parse
 import pprint # pylint: disable=unused-import
 
 from dataclasses import dataclass
+from numpy import uint16
 
 from panda3d.core import * # pylint: disable=wildcard-import
 import panda3d.core as p3d
@@ -228,6 +229,9 @@ class Converter():
             self.csxform = LMatrix4.ident_mat()
             self.csxform_inv = LMatrix4.ident_mat()
             self.compose_cs = CS_zup_right
+
+        if 'extensionsUsed' in gltf_data and "KHR_draco_mesh_compression" in gltf_data['extensionsUsed']:
+            print("Using draco")
 
         # Convert data
         for buffid, gltf_buffer in enumerate(gltf_data.get('buffers', [])):
@@ -928,10 +932,543 @@ class Converter():
 
         self.skeletons[root_nodeid] = skinid
 
+    def load_array_into_buffer(arrayData, componentType):
+        """
+            switch (componentType)
+            {
+            case "Int8Array":
+                arrayBuffer = new ArrayBuffer(arrayData.length);
+                let int8Array = new Int8Array(arrayBuffer);
+                int8Array.set(arrayData);
+                break;
+            case "Uint8Array":
+                arrayBuffer = new ArrayBuffer(arrayData.length);
+                let uint8Array = new Uint8Array(arrayBuffer);
+                uint8Array.set(arrayData);
+                break;
+            case "Int16Array":
+                arrayBuffer = new ArrayBuffer(arrayData.length * 2);
+                let int16Array = new Int16Array(arrayBuffer);
+                int16Array.set(arrayData);
+                break;
+            case "Uint16Array":
+                arrayBuffer = new ArrayBuffer(arrayData.length * 2);
+                let uint16Array = new Uint16Array(arrayBuffer);
+                uint16Array.set(arrayData);
+                break;
+            case "Int32Array":
+                arrayBuffer = new ArrayBuffer(arrayData.length * 4);
+                let int32Array = new Int32Array(arrayBuffer);
+                int32Array.set(arrayData);
+                break;
+            case "Uint32Array":
+                arrayBuffer = new ArrayBuffer(arrayData.length * 4);
+                let uint32Array = new Uint32Array(arrayBuffer);
+                uint32Array.set(arrayData);
+                break;
+            default:
+            case "Float32Array":
+                arrayBuffer = new ArrayBuffer(arrayData.length * 4);
+                let floatArray = new Float32Array(arrayBuffer);
+                floatArray.set(arrayData);
+                break;
+
+            return arrayBuffer;
+        """
+        pass
+
+    def decode_draco_primitive(self, gltf_primitive, gltf_mesh, gltf_data):
+        """ https://github.com/KhronosGroup/glTF-Sample-Viewer/blob/v.1.0.9/source/gltf/primitive.js#L531 """
+        import DracoPy
+
+        extension = gltf_primitive["extensions"]["KHR_draco_mesh_compression"]
+        buffer_view_index = extension["bufferView"] # dracoBufferViewIDX = dracoExtension.bufferView;
+        extension_attributes = extension["attributes"]
+        print("Draco buffer: ", buffer_view_index)
+        print("Draco attributes", extension_attributes)
+        
+        original_buffer_view = gltf_data["bufferViews"][buffer_view_index] # const origGltfDrBufViewObj = gltf.bufferViews[dracoBufferViewIDX];
+        original_buffer_index = original_buffer_view["buffer"]
+        total_buffer = self.buffers[original_buffer_index] #  const origGltfDracoBuffer = gltf.buffers[origGltfDrBufViewObj.buffer];
+
+        buffer_view_data = total_buffer[ original_buffer_view["byteOffset"]: original_buffer_view["byteOffset"] + original_buffer_view["byteLength"] ]
+
+        print("Decoding buffer")
+        draco_geometry = DracoPy.decode(buffer_view_data)
+
+        # https://github.com/KhronosGroup/glTF-Sample-Viewer/blob/v.1.0.9/source/gltf/primitive.js#L578
+
+        if not isinstance( draco_geometry, DracoPy.DracoMesh):  
+            raise RuntimeError("Unexpected geometry type")
+
+        geometry = { "index": None, "attributes": {} }                                      # let geometry = { index: null, attributes: {} };
+        vertex_count = len( draco_geometry.points )                                          # let vertexCount = dracoGeometry.num_points();
+
+        for extension_attribute in extension_attributes:
+            component_type = GeomEnums.NT_int8                                              # let componentType = GL.BYTE
+            accessor_vertex_count = 0                                                       # let accessotVertexCount;
+            
+            if extension_attribute in gltf_primitive["attributes"]:
+                accessor_index = gltf_primitive["attributes"][extension_attribute]
+                accessor = gltf_data["accessors"][accessor_index]                           # componentType = gltf.accessors[value].componentType;
+                component_type = self._COMPONENT_TYPE_MAP[ accessor["componentType"] ]      # gltf.accessors[value].count;
+                accessor_vertex_count = accessor["count"]
+                print( f"{extension_attribute} accessor: {accessor}")
+
+            if vertex_count != accessor_vertex_count:                                       # if(vertexCount !== accessotVertexCount)
+                raise RuntimeError(                                                         # throw new Error(`DRACOLoader: Accessor vertex count ${accessotVertexCount} does not match draco decoder vertex count  ${vertexCount}`);
+                    f"Draco: Accessor vertex count ${accessor_vertex_count} does not match the decoded vertex count ${vertex_count}"
+                )
+            
+            #component_type = 
+            #geometry["attributes"][extension_attribute] = "data"
+        """"
+        // Gather all vertex attributes.
+
+            componentType = this.getDracoArrayTypeFromComponentType(componentType);
+
+            let dracoAttribute = decoder.GetAttributeByUniqueId( dracoGeometry, gltfDracoAttributes[dracoAttr]);
+            var tmpObj = this.decodeAttribute( draco, decoder,
+                dracoGeometry, dracoAttr, dracoAttribute, componentType);
+            geometry.attributes[tmpObj.name] = tmpObj;
+        }
+
+        // Add index buffer
+        if ( geometryType === draco.TRIANGULAR_MESH ) {
+
+            // Generate mesh faces.
+            let numFaces = dracoGeometry.num_faces();
+            let numIndices = numFaces * 3;
+            let dataSize = numIndices * 4;
+            let ptr = draco._malloc( dataSize );
+            decoder.GetTrianglesUInt32Array( dracoGeometry, dataSize, ptr );
+            let index = new Uint32Array( draco.HEAPU32.buffer, ptr, numIndices ).slice();
+            draco._free( ptr );
+
+            geometry.index = { array: index, itemSize: 1 };
+
+        }
+
+        draco.destroy( dracoGeometry );
+        
+        return geometry;
+        """
+
+        # https://github.com/KhronosGroup/glTF-Sample-Viewer/blob/v.1.0.9/source/gltf/primitive.js#L363
+        # copyDataFromDecodedGeometry(gltf, dracoGeometry, primitiveAttributes)
+
+        import numpy 
+        
+        # indices
+        if "indices" in gltf_primitive:
+            print("has indices")
+            accessor_index = gltf_primitive["indices"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+            print("indices accessor: ", accessor)
+
+ 
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            
+            components_per_face = draco_geometry.faces.shape[1]
+
+            index_buffer_size = len(draco_geometry.faces) * components_per_face * component_size
+            print( f"Index size in bytes: {index_buffer_size}")
+
+            indices = numpy.array(draco_geometry.faces.flatten(), "uint16")
+            index_buffer = indices.tobytes()
+            print ( "New buffer length: ", len(index_buffer) )
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(index_buffer)
+
+            self.buffers[ buffer_index ] = indices.tobytes() #index_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "index buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+        # Position
+        if "POSITION" in extension["attributes"]: 
+            print("has POSITION")
+            accessor_index = gltf_primitive["attributes"]["POSITION"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+            print("POSITION accessor: ", accessor )
+            print("POSITION attribute: ", extension["attributes"]["POSITION"] )
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            position_buffer_size = len(draco_geometry.points) * components_per_vertex * component_size
+            print( f"position buffer size in bytes: {position_buffer_size}")
+
+            positions = numpy.array( draco_geometry.points.flatten(), "float32")
+            position_buffer = positions.tobytes()
+            print ( "New buffer length: ", len(position_buffer) )
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(position_buffer)
+
+            self.buffers[ buffer_index ] = position_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "position buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+        
+        # NORMAL
+        if "NORMAL" in extension["attributes"]: 
+            print("has NORMAL")
+            accessor_index =  gltf_primitive["attributes"]["NORMAL"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+            print("NORMAL accessor: ", accessor )
+            print("NORMAL attribute: ", extension["attributes"]["NORMAL"] )
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            normal_buffer_size = len(draco_geometry.normals) * components_per_vertex * component_size
+            print( f"normal buffer size in bytes: {normal_buffer_size}")
+
+            normals = numpy.array( draco_geometry.normals.flatten(), "float32")
+            normal_buffer = normals.tobytes()
+            print ( "New buffer length: ", len(normal_buffer) )
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(normal_buffer)
+
+            self.buffers[ buffer_index ] = normal_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "normal buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+        # TEXCOORD_0
+        if "TEXCOORD_0" in extension["attributes"]:
+            print("has TEXCOORD_0")
+            accessor_index = gltf_primitive["attributes"]["TEXCOORD_0"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+            print("TEXCOORD_0 accessor: ", accessor )
+            print("TEXCOORD_0 attribute: ", extension["attributes"]["TEXCOORD_0"] )
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            texcoord_0_buffer_size = len(draco_geometry.tex_coord) * components_per_vertex * component_size
+            print( f"texcoord_0 buffer size in bytes: {texcoord_0_buffer_size}")
+
+            texcoord_0 = numpy.array( draco_geometry.tex_coord.flatten(), "float32")
+            texcoord_0_buffer = texcoord_0.tobytes()
+            print ( "New buffer length: ", len(texcoord_0_buffer) )
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(texcoord_0_buffer)
+
+            self.buffers[ buffer_index ] = texcoord_0_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "texcoord_0 buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+        # Just fill with zeroes for now
+        if "TANGENT" in extension["attributes"]: 
+            print("has TANGENT")
+            accessor_index = gltf_primitive["attributes"]["TANGENT"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            tangent_buffer_size = len(draco_geometry.tex_coord) * components_per_vertex * component_size
+            print( f"tangent buffer size in bytes: {tangent_buffer_size}")
+
+            tangent_buffer = bytearray(tangent_buffer_size)
+
+            #del extension["attributes"]["TANGENT"]
+            #del gltf_primitive["attributes"]["TANGENT"]
+            #del gltf_data["accessors"][accessor_index]
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(tangent_buffer)
+
+            self.buffers[ buffer_index ] = tangent_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "texcoord_0 buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+            print("TANGENT accessor: ", accessor )
+
+        # Color
+        if "COLOR_0" in extension["attributes"]: 
+            print("has COLOR_0")
+            accessor_index = gltf_primitive["attributes"]["COLOR_0"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            color_0_size = len(draco_geometry.tex_coord) * components_per_vertex * component_size
+            print( f"color_0 buffer size in bytes: {color_0_size}")
+
+            color_0_buffer = bytearray(color_0_size)
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(color_0_buffer)
+
+            self.buffers[ buffer_index ] = color_0_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "color_0 buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+            print("COLOR_0 accessor: ", accessor )
+
+        # JOINTS_0
+        if "JOINTS_0" in extension["attributes"]: 
+            print("has JOINTS_0")
+            accessor_index = gltf_primitive["attributes"]["JOINTS_0"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            joints_0_size = len(draco_geometry.tex_coord) * components_per_vertex * component_size
+            print( f"joints_0 buffer size in bytes: {joints_0_size}")
+
+            joints_0_buffer = bytearray(joints_0_size)
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(joints_0_buffer)
+
+            self.buffers[ buffer_index ] = joints_0_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "joints_0 buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+            print("JOINTS_0 accessor: ", accessor )
+
+        # WEIGHTS_0
+        if "WEIGHTS_0" in extension["attributes"]: 
+            print("has WEIGHTS_0")
+            accessor_index = gltf_primitive["attributes"]["WEIGHTS_0"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            weights_0_size = len(draco_geometry.tex_coord) * components_per_vertex * component_size
+            print( f"weights_0 buffer size in bytes: {weights_0_size}")
+
+            weights_0_buffer = bytearray(weights_0_size)
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(weights_0_buffer)
+
+            self.buffers[ buffer_index ] = weights_0_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "weights_0 buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+            print("WEIGHTS_0 accessor: ", accessor )
+
+        # JOINTS_1
+        if "JOINTS_1" in extension["attributes"]: 
+            print("has JOINTS_1")
+            accessor_index = gltf_primitive["attributes"]["JOINTS_1"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            joints_1_size = len(draco_geometry.tex_coord) * components_per_vertex * component_size
+            print( f"joints_1 buffer size in bytes: {joints_1_size}")
+
+            joints_1_buffer = bytearray(joints_1_size)
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(joints_1_buffer)
+
+            self.buffers[ buffer_index ] = joints_1_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "joints_1 buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+            print("JOINTS_1 accessor: ", accessor )
+
+        # WEIGHTS_1
+        if "WEIGHTS_1" in extension["attributes"]: 
+            print("has WEIGHTS_1")
+            accessor_index = gltf_primitive["attributes"]["WEIGHTS_1"]
+            accessor = gltf_data["accessors"][ accessor_index ]
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            weights_1_size = len(draco_geometry.tex_coord) * components_per_vertex * component_size
+            print( f"weights_1 buffer size in bytes: {weights_1_size}")
+
+            weights_1_buffer = bytearray(weights_1_size)
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(weights_1_buffer)
+
+            self.buffers[ buffer_index ] = weights_1_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": "weights_1 buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+            print("JOINTS_1 accessor: ", accessor )
+
+        for _custom in extension["attributes"]:
+            if _custom in ["POSITION", "NORMAL", "TEXCOORD_0", "TANGENT", "COLOR_0", "JOINTS_0", "WEIGHTS_0", "JOINTS_1", "WEIGHTS_1"]:
+                print(f"Skipping known attribute {_custom}")
+                continue
+
+            print(f"has custom feature {_custom}")
+            accessor_index = gltf_primitive["attributes"][_custom]
+            accessor = gltf_data["accessors"][ accessor_index ]
+
+            component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
+            component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
+            components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+
+            _custom_attr_size = accessor["count"] * components_per_vertex * component_size
+            print( f"{_custom.lower()} buffer size in bytes: {_custom_attr_size}")
+
+            _custom_attr_buffer = bytearray(_custom_attr_size)
+
+            buffer_index = len( self.buffers.keys() )
+            buffer_size = len(_custom_attr_buffer)
+
+            self.buffers[ buffer_index ] = _custom_attr_buffer
+
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": f"{_custom.lower()} buffer view"
+            }
+            
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+
+            print(f"{_custom} accessor: ", accessor )
+
     def load_primitive(self, geom_node, gltf_primitive, gltf_mesh, gltf_data):
+
+        if 'extensionsUsed' in gltf_data and "KHR_draco_mesh_compression" in gltf_data['extensionsUsed']:
+            self.decode_draco_primitive(gltf_primitive, gltf_mesh, gltf_data)
+
         # Build Vertex Format
         vformat = GeomVertexFormat()
         mesh_attribs = gltf_primitive['attributes']
+        print( mesh_attribs )
         accessors = [
             {**gltf_data['accessors'][acc_idx], '_attrib': attrib_name}
             for attrib_name, acc_idx in mesh_attribs.items()
@@ -1091,6 +1628,9 @@ class Converter():
                 column_name = column.get_name()
                 if column_name in skip_columns:
                     varray = varray_skin
+                #TODO: if parent is none, the column_name.parent.basename explodes
+                #elif not column_name.parent:
+                #   print( f"column {column_name} has no parent: {column}" 
                 elif column_name.parent.basename == "morph":
                     varray = varray_morph
                 else:
