@@ -76,7 +76,6 @@ def slerp(quata: p3d.LQuaternion, quatb: p3d.LQuaternion, factor: float) -> p3d.
 
     return quata * scale_quata + quatb * scale_quatb
 
-
 def get_next_time_index(currtime: float, time_buffer: list[float]) -> int:
     nextidx = 1
     nexttime = time_buffer[nextidx]
@@ -979,6 +978,7 @@ class Converter():
 
     def decode_draco_primitive(self, gltf_primitive, gltf_mesh, gltf_data):
         """ https://github.com/KhronosGroup/glTF-Sample-Viewer/blob/v.1.0.9/source/gltf/primitive.js#L531 """
+        """ https://github.com/KhronosGroup/glTF-Blender-IO/blob/main/addons/io_scene_gltf2/blender/imp/gltf2_io_draco_compression_extension.py#L23 """
         import DracoPy
 
         extension = gltf_primitive["extensions"]["KHR_draco_mesh_compression"]
@@ -991,7 +991,21 @@ class Converter():
         original_buffer_index = original_buffer_view["buffer"]
         total_buffer = self.buffers[original_buffer_index] #  const origGltfDracoBuffer = gltf.buffers[origGltfDrBufViewObj.buffer];
 
-        buffer_view_data = total_buffer[ original_buffer_view["byteOffset"]: original_buffer_view["byteOffset"] + original_buffer_view["byteLength"] ]
+        start_index = original_buffer_view["byteOffset"]
+        end_index = original_buffer_view["byteOffset"] + original_buffer_view["byteLength"]
+
+        buffer_view_data = total_buffer[ start_index: end_index]
+        filename = f"{self.filepath}.{buffer_view_index}_{start_index}-{end_index}.drc"
+        
+        import pathlib
+        filepath = pathlib.Path(filename).absolute()
+        if filepath.exists():
+            print(f"{filepath} already exists")
+        else:
+            print(f"Saving bufferview {buffer_view_index} of buffer {original_buffer_index} to {filepath}")            
+            with open(filepath, "wb") as f:
+                print(f"writing {len(buffer_view_data)} bytes to file")
+                f.write(buffer_view_data)
 
         print("Decoding buffer")
         draco_geometry = DracoPy.decode(buffer_view_data)
@@ -1182,8 +1196,9 @@ class Converter():
             component_type = self._COMPONENT_TYPE_MAP[accessor["componentType"]]
             component_size = self._COMPONENT_SIZE_MAP[accessor["componentType"]]
             components_per_vertex = self._COMPONENT_NUM_MAP[accessor["type"]]
+            component_count = len(draco_geometry.tex_coord) # accessor["count"]
 
-            texcoord_0_buffer_size = len(draco_geometry.tex_coord) * components_per_vertex * component_size
+            texcoord_0_buffer_size = component_count * components_per_vertex * component_size
             print( f"texcoord_0 buffer size in bytes: {texcoord_0_buffer_size}")
 
             texcoord_0 = numpy.array( draco_geometry.tex_coord.flatten(), "float32")
@@ -1460,10 +1475,130 @@ class Converter():
 
             print(f"{_custom} accessor: ", accessor )
 
+    def decode_draco_primitive_2(self, gltf_primitive, gltf_mesh, gltf_data):
+        """ https://github.com/KhronosGroup/glTF-Sample-Viewer/blob/v.1.0.9/source/gltf/primitive.js#L531 """
+        """ https://github.com/KhronosGroup/glTF-Blender-IO/blob/main/addons/io_scene_gltf2/blender/imp/gltf2_io_draco_compression_extension.py#L23 """
+        from . import draco_compression
+
+        extension = gltf_primitive["extensions"]["KHR_draco_mesh_compression"]
+        buffer_view_index = extension["bufferView"] # dracoBufferViewIDX = dracoExtension.bufferView;
+        extension_attributes = extension["attributes"]
+        print("Draco buffer: ", buffer_view_index)
+        print("Draco attributes", extension_attributes)
+        
+        original_buffer_view = gltf_data["bufferViews"][buffer_view_index] # const origGltfDrBufViewObj = gltf.bufferViews[dracoBufferViewIDX];
+        original_buffer_index = original_buffer_view["buffer"]
+        total_buffer = self.buffers[original_buffer_index] #  const origGltfDracoBuffer = gltf.buffers[origGltfDrBufViewObj.buffer];
+
+        start_index = original_buffer_view["byteOffset"]
+        end_index = original_buffer_view["byteOffset"] + original_buffer_view["byteLength"]
+
+        buffer_view_data = total_buffer[ start_index: end_index]
+        filename = f"{self.filepath}.{buffer_view_index}_{start_index}-{end_index}.drc"
+        
+        import pathlib
+        filepath = pathlib.Path(filename)
+        if filepath.exists():
+            print(f"{filepath} already exists")
+        else:
+            print(f"Saving bufferview {buffer_view_index} of buffer {original_buffer_index} to {filepath}")            
+            with open(filepath, "wb") as f:
+                print(f"writing {len(buffer_view_data)} bytes to file")
+                f.write(buffer_view_data)
+
+        print("Decoding buffer")
+        draco = draco_compression._load_dll()
+
+        draco_decoder = draco.decoderCreate()
+
+        if not draco.decoderDecode(draco_decoder, buffer_view_data, len(buffer_view_data)):
+            raise RuntimeError("Could not decode mesh")
+
+        # Read indices.
+        index_accessor_index = gltf_primitive["indices"]
+        index_accessor = gltf_data["accessors"][index_accessor_index]
+        if draco.decoderGetIndexCount(draco_decoder) != index_accessor["count"]:
+            print('WARNING', 'Draco Decoder: Index count of accessor and decoded index count does not match. Updating accessor.')
+            index_accessor.count = draco.decoderGetIndexCount(draco_decoder)
+
+        if not draco.decoderReadIndices(draco_decoder, index_accessor["componentType"]):
+            print('ERROR', 'Draco Decoder: Unable to decode indices. Skipping primitive')
+            return
+
+        index_buffer_byte_length = draco.decoderGetIndicesByteLength(draco_decoder)
+        decoded_index_buffer = bytes(index_buffer_byte_length)
+        draco.decoderCopyIndices(draco_decoder, decoded_index_buffer)
+        print(f"Loaded index buffer containing {index_buffer_byte_length} bytes")
+
+        # Generate a new buffer holding the decoded index data.
+        buffer_index = len( self.buffers.keys() )
+        self.buffers[ buffer_index ] = decoded_index_buffer
+
+        # Create a buffer view referencing the new buffer.
+        buffer_view = {
+            "buffer": buffer_index,
+            "byteLength": index_buffer_byte_length,
+            "name": f"index buffer view"
+        }
+        print("added buffer view ", buffer_view)
+        gltf_data["bufferViews"].append(buffer_view)
+        buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+        # Update accessor to point to the new buffer view.
+        index_accessor["byteOffset"] = 0
+        index_accessor["bufferView"] = buffer_view_index
+        gltf_data["accessors"][index_accessor_index] = index_accessor         
+
+        # Read each attribute.
+        for attr in extension['attributes']:
+            print(f"Processing attribute {attr}")
+            dracoId = extension['attributes'][attr]
+            if attr not in gltf_primitive["attributes"]:
+                print('ERROR', f'Draco Decoder: Draco attribute {attr} not in primitive attributes. Skipping primitive')
+                return
+            
+            accessor_index = gltf_primitive["attributes"][attr]
+            accessor = gltf_data["accessors"][accessor_index]
+            if draco.decoderGetVertexCount(draco_decoder) != accessor["count"]:
+                print('WARNING', f'Draco Decoder: Vertex count of accessor and decoded vertex count does not match for attribute {attr}. Updating accessor.')
+                accessor["count"] = draco.decoderGetVertexCount(draco_decoder)
+                gltf_data["accessors"][accessor_index] = accessor
+
+            if not draco.decoderReadAttribute(draco_decoder, dracoId, accessor["componentType"], accessor["type"].encode()):
+                print('ERROR', f'Draco Decoder: Could not decode attribute {attr}. Skipping primitive')
+                return
+            
+            buffer_size = draco.decoderGetAttributeByteLength(draco_decoder, dracoId)
+            decoded_buffer = bytes(buffer_size)
+            draco.decoderCopyAttribute(draco_decoder, dracoId, decoded_buffer)
+            print(f"Loaded {attr} buffer containing {buffer_size} bytes")
+
+            # Generate a new buffer holding the decoded vertex data.
+            buffer_index = len( self.buffers.keys() )
+            self.buffers[ buffer_index ] = decoded_buffer
+
+            # Create a buffer view referencing the new buffer.
+            buffer_view = {
+                "buffer": buffer_index,
+                "byteLength": buffer_size,
+                "name": f"{attr} buffer view"
+            }
+            print("added buffer view ", buffer_view)
+            gltf_data["bufferViews"].append(buffer_view)
+            buffer_view_index = len( gltf_data["bufferViews"] ) - 1
+
+            # Update accessor to point to the new buffer view.
+            accessor["byteOffset"] = 0
+            accessor["bufferView"] = buffer_view_index
+            gltf_data["accessors"][accessor_index] = accessor
+            
+        draco.decoderRelease(draco_decoder)
+
     def load_primitive(self, geom_node, gltf_primitive, gltf_mesh, gltf_data):
 
+        # Compare with https://github.com/KhronosGroup/glTF-Blender-IO/blob/main/addons/io_scene_gltf2/blender/imp/gltf2_blender_mesh.py#L168
         if 'extensionsUsed' in gltf_data and "KHR_draco_mesh_compression" in gltf_data['extensionsUsed']:
-            self.decode_draco_primitive(gltf_primitive, gltf_mesh, gltf_data)
+            self.decode_draco_primitive_2(gltf_primitive, gltf_mesh, gltf_data)
 
         # Build Vertex Format
         vformat = GeomVertexFormat()
