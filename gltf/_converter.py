@@ -1478,17 +1478,17 @@ class Converter():
     def decode_draco_primitive_2(self, gltf_primitive, gltf_mesh, gltf_data):
         """ https://github.com/KhronosGroup/glTF-Sample-Viewer/blob/v.1.0.9/source/gltf/primitive.js#L531 """
         """ https://github.com/KhronosGroup/glTF-Blender-IO/blob/main/addons/io_scene_gltf2/blender/imp/gltf2_io_draco_compression_extension.py#L23 """
-        from . import draco_compression
+        from .extensions.draco import draco_compression
 
         extension = gltf_primitive["extensions"]["KHR_draco_mesh_compression"]
-        buffer_view_index = extension["bufferView"] # dracoBufferViewIDX = dracoExtension.bufferView;
+        buffer_view_index = extension["bufferView"]
         extension_attributes = extension["attributes"]
         print("Draco buffer: ", buffer_view_index)
         print("Draco attributes", extension_attributes)
         
-        original_buffer_view = gltf_data["bufferViews"][buffer_view_index] # const origGltfDrBufViewObj = gltf.bufferViews[dracoBufferViewIDX];
+        original_buffer_view = gltf_data["bufferViews"][buffer_view_index]
         original_buffer_index = original_buffer_view["buffer"]
-        total_buffer = self.buffers[original_buffer_index] #  const origGltfDracoBuffer = gltf.buffers[origGltfDrBufViewObj.buffer];
+        total_buffer = self.buffers[original_buffer_index]
 
         start_index = original_buffer_view["byteOffset"]
         end_index = original_buffer_view["byteOffset"] + original_buffer_view["byteLength"]
@@ -1598,7 +1598,9 @@ class Converter():
 
         # Compare with https://github.com/KhronosGroup/glTF-Blender-IO/blob/main/addons/io_scene_gltf2/blender/imp/gltf2_blender_mesh.py#L168
         if 'extensionsUsed' in gltf_data and "KHR_draco_mesh_compression" in gltf_data['extensionsUsed']:
-            self.decode_draco_primitive_2(gltf_primitive, gltf_mesh, gltf_data)
+            from .extensions.draco import draco_compression
+            draco_compression.decode_primitive(self, gltf_primitive, gltf_mesh, gltf_data)
+            #self.decode_draco_primitive_2(gltf_primitive, gltf_mesh, gltf_data)
 
         # Build Vertex Format
         vformat = GeomVertexFormat()
