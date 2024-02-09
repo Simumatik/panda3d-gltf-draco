@@ -24,7 +24,6 @@ dependencies = [
     "panda3d >= 1.10.8",
     "panda3d-simplepbr >= 0.6",
     "numpy",
-    "DracoPy",
     "smtk_draco==0.0.1"
 ]
 requires-python = ">= 3.8"
