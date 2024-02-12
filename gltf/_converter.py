@@ -932,7 +932,8 @@ class Converter():
 
     def load_primitive(self, geom_node, gltf_primitive, gltf_mesh, gltf_data):
         # If Draco mesh compression is used, the primitive has to be decoded first
-        if 'extensionsUsed' in gltf_data and draco.EXTENSION_NAME in gltf_data['extensionsUsed']:
+        # Compare with https://github.com/KhronosGroup/glTF-Blender-IO/blob/949429900a7899efa12323bea4a57ac92b5b68e6/addons/io_scene_gltf2/blender/imp/gltf2_blender_mesh.py#L169
+        if 'extensions' in gltf_primitive and draco.EXTENSION_NAME in gltf_primitive['extensions']:
             draco.decode_primitive(self, gltf_primitive, gltf_data)
 
         # Build Vertex Format
