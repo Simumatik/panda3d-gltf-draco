@@ -939,7 +939,7 @@ class Converter():
         # Build Vertex Format
         vformat = GeomVertexFormat()
         mesh_attribs = gltf_primitive['attributes']
-        print( mesh_attribs )
+        #print( mesh_attribs )
         accessors = [
             {**gltf_data['accessors'][acc_idx], '_attrib': attrib_name}
             for attrib_name, acc_idx in mesh_attribs.items()
