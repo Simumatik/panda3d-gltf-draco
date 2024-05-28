@@ -1,0 +1,2 @@
+class UnsupportedExtensionExeption(RuntimeError):
+    pass

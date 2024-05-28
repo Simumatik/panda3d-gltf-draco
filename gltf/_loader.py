@@ -4,15 +4,24 @@ import panda3d.core as p3d
 
 from ._converter import GltfSettings, Converter
 from .parseutils import parse_gltf_file
-
+from .exceptions import UnsupportedExtensionExeption
 
 def load_model(file_path, gltf_settings=None):
     '''Load a glTF file from file_path and return a ModelRoot'''
     converter = Converter(file_path, settings=gltf_settings)
     gltf_data = parse_gltf_file(file_path)
+  
+    check_extension_support(gltf_data)
+
     converter.update(gltf_data)
     return converter.active_scene.node()
 
+def check_extension_support(gltf_data):
+    if "extensionsRequired" not in gltf_data:
+        return
+
+    if "KHR_mesh_quantization" in gltf_data["extensionsRequired"]:
+        raise UnsupportedExtensionExeption("The required glTF extension KHR_mesh_quantization is not supported")    
 
 def _config_var_for_type(var_type):
     return {
