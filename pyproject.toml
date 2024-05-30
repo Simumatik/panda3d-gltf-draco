@@ -45,7 +45,7 @@ gltf = "gltf._loader:GltfLoader"
 glb = "gltf._loader:GltfLoader"
 
 [tool.setuptools]
-packages = ["gltf"]
+packages = ["gltf", "gltf.extensions"]
 
 [tool.setuptools.dynamic]
 version = {attr = "gltf.version.__version__"}
