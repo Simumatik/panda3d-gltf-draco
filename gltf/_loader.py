@@ -9,15 +9,12 @@ from .exceptions import UnsupportedExtensionExeption
 
 def load_model(file_path, gltf_settings=None):
     """Load a glTF file from file_path and return a ModelRoot"""
-    print("starting converter")
     converter = Converter(file_path, settings=gltf_settings)
-    print("parsing gltf")
     gltf_data = parse_gltf_file(file_path)
-    # check_extension_support(gltf_data)
 
-    print("updating")
+    check_extension_support(gltf_data)
     converter.update(gltf_data)
-    print("presenting node")
+
     return converter.active_scene.node()
 
 
@@ -25,9 +22,13 @@ def check_extension_support(gltf_data):
     if "extensionsRequired" not in gltf_data:
         return
 
-    if "KHR_mesh_quantization" in gltf_data["extensionsRequired"]:
+    # KHR_mesh_quantization is partially implemented except for texture quantization depends
+    # on KHR_texture_transform. Also, details related to skinned/non-skinned meshes + 
+    # morph targets have not been tested (unclear if anything has to be done.).
+
+    if "KHR_texture_transform " in gltf_data["extensionsRequired"]:
         raise UnsupportedExtensionExeption(
-            "The required glTF extension KHR_mesh_quantization is not supported"
+            "The required glTF extension KHR_texture_transform is not supported"
         )
 
 

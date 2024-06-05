@@ -287,6 +287,8 @@ class Converter:
         33648: SamplerState.WM_mirror,
     }
 
+    _MIN_SCALE_THRESHOLD = 0.01
+
     def __init__(self, filepath, settings=None):
         if not isinstance(filepath, Filename):
             filepath = Filename.from_os_specific(filepath)
@@ -294,6 +296,7 @@ class Converter:
             settings = GltfSettings()
         self.filepath = filepath
         self.filedir = Filename(filepath.get_dirname())
+
         self.settings = settings
         self.cameras = {}
         self.buffers = {}
@@ -372,7 +375,14 @@ class Converter:
             else:
                 gltf_mat = LMatrix4(LMatrix4.ident_mat())
                 if "scale" in gltf_node:
-                    gltf_mat.set_scale_mat(tuple(gltf_node["scale"]))
+                    scale_mat = LVector3f(*gltf_node["scale"])
+
+                    # Some models have such a small scale value that it essentially causes a linmath singularity.
+                    # To be safe, we clamp the value here (uniform accross all axes).
+                    if scale_mat.x < self._MIN_SCALE_THRESHOLD or scale_mat.y < self._MIN_SCALE_THRESHOLD or scale_mat.z < self._MIN_SCALE_THRESHOLD:
+                        scale_mat.fill(self._MIN_SCALE_THRESHOLD)
+
+                    gltf_mat.set_scale_mat(scale_mat)
 
                 if "rotation" in gltf_node:
                     rot_mat = LMatrix4()
@@ -384,6 +394,7 @@ class Converter:
                 if "translation" in gltf_node:
                     gltf_mat *= LMatrix4.translate_mat(*gltf_node["translation"])
 
+            
             return TransformState.make_mat(self.csxform_inv * gltf_mat * self.csxform)
 
         def build_characters(nodeid):
@@ -586,6 +597,7 @@ class Converter:
             # Check if we need to deal with negative scale values
             scale = panda_node.get_transform().get_scale()
             negscale = scale.x * scale.y * scale.z < 0
+
             if negscale:
                 for geomnode in np.find_all_matches("**/+GeomNode"):
                     tmp = geomnode.get_parent().attach_new_node(
@@ -1095,7 +1107,6 @@ class Converter:
         # Build Vertex Format
         vformat = GeomVertexFormat()
         mesh_attribs = gltf_primitive["attributes"]
-        # print(mesh_attribs)
 
         accessors = [
             {**gltf_data["accessors"][acc_idx], "_attrib": attrib_name}
@@ -1151,21 +1162,12 @@ class Converter:
                     )
                 else:
                     internal_name = InternalName.make(attrib_name)
+
                 num_components = self._COMPONENT_NUM_MAP[acc["type"]]
-                str_type = self._COMPONENT_FORMT_NAME_MAP[acc["componentType"]]
                 numeric_type = self._COMPONENT_TYPE_MAP[acc["componentType"]]
                 numeric_size = self._COMPONENT_SIZE_MAP[acc["componentType"]]
                 content = self._ATTRIB_CONTENT_MAP.get(attrib_name, GeomEnums.C_other)
                 size = numeric_size * num_components
-                
-                if acc["_attrib"] != "POSITION":
-                    print("skipping", acc["_attrib"] )
-                    #skip anything that is not a position
-                    continue
-                
-                print(
-                    f"{acc["_attrib"]} | {acc["type"]} | {num_components} components | {str_type} ({numeric_size} byte(s)) [{acc["componentType"]}; {numeric_type}] {attrib_name} | {content} | total: {size} byte(s)"
-                )
                 
                 if "_target" in acc:
                     internal_name = InternalName.get_morph(attrib_name, acc["_target"])
@@ -1178,7 +1180,7 @@ class Converter:
                 # Weights normalization will only be performed on float weights.
                 if attrib_parts[0] == "weights":
                     normalize_weights = numeric_type == GeomEnums.NT_float32
-
+                
                 if not is_interleaved:
                     # Start a new vertex array format
                     vformat.add_array(varray)
@@ -1213,6 +1215,11 @@ class Converter:
         for array_idx, data_info in enumerate(data_copies):
             buffid, start, count, size, stride = data_info
 
+            # With KHR_mesh_quantization, vertex data may not align with 4-byte boundaries
+            # which has to be accounted for when copying the data to the destination
+            # using the stride of the vertex format.
+            dest_stride = reg_format.getArray(array_idx).getStride()
+
             handle = vdata.modify_array(array_idx).modify_handle()
             handle.unclean_set_num_rows(count)
 
@@ -1224,8 +1231,8 @@ class Converter:
                 src = start
                 dest = 0
                 while src < end:
-                    handle.copy_subdata_from(dest, size, buff[src : src + size])
-                    dest += size
+                    handle.copySubdataFrom(dest, size, buff[src : src + size])
+                    dest += dest_stride
                     src += stride
             handle = None
 
@@ -1276,9 +1283,7 @@ class Converter:
                 if max_weight != 0.0:
                     weights = weights / max_weight
                 weights_data.set_data4f(weights)
-                
-        with open("tin_can_v2_before_repack.vertices", "w") as f:
-            f.write(str(vdata))
+    
         # Repack mesh data
         vformat = GeomVertexFormat()
         varray_vert = GeomVertexArrayFormat()
@@ -1291,6 +1296,7 @@ class Converter:
             InternalName.get_transform_weight(),
             InternalName.get_transform_blend(),
         )
+
         for arr in reg_format.get_arrays():
             for column in arr.get_columns():
                 column_name = column.get_name()
@@ -1303,12 +1309,23 @@ class Converter:
                     varray = varray_morph
                 else:
                     varray = varray_vert
-                varray.add_column(
-                    column_name,
-                    column.get_num_components(),
-                    column.get_numeric_type(),
-                    column.get_contents(),
-                )
+
+                if( column_name.name in ('vertex') ):
+                    # Convert vertices to float
+                    varray.add_column(
+                        column_name,
+                        column.get_num_components(),
+                        GeomEnums.NT_float32,
+                        GeomEnums.C_point,
+                    )
+                else:
+                    varray.add_column(
+                        column_name,
+                        column.get_num_components(),
+                        column.get_numeric_type(),
+                        column.get_contents(),
+                    )
+        
         vformat.add_array(varray_vert)
 
         if is_skinned or targets:
@@ -1330,63 +1347,9 @@ class Converter:
 
         if targets:
             vformat.add_array(varray_morph)
-
-        reg_format = GeomVertexFormat.register_format(vformat)
-        #reg_format = GeomVertexFormat()
-        # reg_vertex_format = GeomVertexArrayFormat() 
-        # reg_vertex_format.add_column(
-        #     "vertex",
-        #     3,
-        #     GeomEnums.NT_float32,
-        #     GeomEnums.C_point,
-        # )
-        # reg_format = GeomVertexFormat.register_format(reg_vertex_format)
-        # newdata = GeomVertexData(geom_node.name, reg_format, GeomEnums.UH_stream)
-        # print(vformat)
-        # print(reg_format)
-        # print("Before convert: ", GeomVertexReader(vdata, 'vertex').getData3())
-        # import numpy
-        # print("reader")
-        # reader = GeomVertexReader(vdata, 'vertex')
-        # print("writer")
-        # writer = GeomVertexWriter(newdata, 'vertex')
-        # print(writer)
-        # print("loop")
-        # while not reader.isAtEnd():
-        #     v = reader.getData3()
-        #     writer.addData3( 
-        #         v.x , 
-        #         v.y ,
-        #         v.z 
-        #     )
-        #     writer.addData3( 
-        #         numpy.float32( v.x / 65535.0), 
-        #         numpy.float32( v.y / 65535.0),
-        #         numpy.float32( v.z / 65535.0)
-        #     )
-
-        #     print(
-        #         v.x, 
-        #         v.y,
-        #         v.z
-        #     )
-        #     print(
-        #         numpy.float32( v.x / 65535.0), 
-        #         numpy.float32( v.y / 65535.0),
-        #         numpy.float32( v.z / 65535.0)
-        #     )
-            
-
-        # vdata = vdata.convert_to(reg_format)
-        # vdata = newdata
-        # reg_format.add_array(reg_vertex_format)
-
-        # print("After convert: ", GeomVertexReader(vdata, 'vertex').getData3())
-
-        vdata = vdata.convert_to(reg_format)
         
-        with open("tin_can_v2.vertices", "w") as f:
-            f.write(str(vdata))
+        reg_format = GeomVertexFormat.register_format(vformat)
+        vdata = vdata.convert_to(reg_format)
 
         # Construct primitive
         primitiveid = geom_node.get_num_geoms()
@@ -1450,16 +1413,9 @@ class Converter:
                 (geom_node.name, primitiveid)
             )
 
-        # Add this primitive back to the geom node
-        # ss = StringStream()
-        # vdata.write(ss)
-        ###prim.write(ss, 2)
-        # print(ss.data.decode('utf8'))
-        calc_normals = True
-        calc_tangents = True
-
         geom = Geom(vdata)
         geom.add_primitive(prim)
+
         if calc_normals:
             self.calculate_normals(geom)
         if calc_tangents:
@@ -1626,7 +1582,6 @@ class Converter:
         )
 
         # Find animations that affect the collected nodes.
-        # print("Looking for actions for", skinname, node_ids)
         if not self.settings.skip_animations:
             anims = [
                 (animid, anim)
@@ -1639,7 +1594,6 @@ class Converter:
 
         for animid, gltf_anim in anims:
             anim_name = gltf_anim.get("name", "anim" + str(animid))
-            # print("\t", anim_name)
 
             samplers = gltf_anim["samplers"]
             channels = gltf_anim["channels"]
@@ -1772,7 +1726,7 @@ class Converter:
 
             for i in range(ibmacc["count"]):
                 mat = struct.unpack_from("<{}".format("f" * 16), ibmdata, i * 16 * 4)
-                # print('loaded', mat)
+
                 mat = self.load_matrix(mat)
                 mat.invert_in_place()
                 bind_mats[i] = mat
@@ -1811,7 +1765,6 @@ class Converter:
             affected_nodeids.add(nodeid)
 
             for child in node.get("children", []):
-                # print("Create joint for child", child)
                 create_joint(joint, child, bind_pose * transform)
 
         root_mat = (
