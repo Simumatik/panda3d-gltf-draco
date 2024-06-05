@@ -1,0 +1,76 @@
+{
+    "configurations": [
+        {
+            "name": "Python Debugger: Dequantized Tin Can",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "..\\glTF-Transform\\tin_can_v2_dequantized.glb",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Quantized Tin Can",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/tin_can_v2_mesh_quant.glb",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Regular Tin Can",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/tin_can_v2.glb",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Dequantized Box",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/box_dequantized.glb",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Quantized box",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/box_quant.glb",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Regular Box",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/box.glb",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Blue can",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/can_blue.glb",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Duck",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/duck.glb",
+            "justMyCode": false
+        },
+    ]
+}

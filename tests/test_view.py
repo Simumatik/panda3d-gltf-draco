@@ -1,18 +1,19 @@
-import math
-import os
+import traceback
 import sys
-
+import os
+import math
 from direct.showbase.ShowBase import ShowBase
-import panda3d.core as p3d
 
+# from panda3d.core import
+# from panda3d.core import AmbientLight, DirectionalLight
+import panda3d.core as p3d
 import simplepbr
 
-
 p3d.load_prc_file_data(
-    '',
-    'window-size 1024 768\n'
-    'texture-minfilter mipmap\n'
-    'texture-anisotropic-degree 16\n'
+    "",
+    "window-size 1024 768\n"
+    "texture-minfilter mipmap\n"
+    "texture-anisotropic-degree 16\n",
 )
 
 
@@ -31,16 +32,16 @@ class App(ShowBase):
 
         self.model_root = self.loader.load_model(infile, noCache=True)
 
-        self.accept('escape', sys.exit)
-        self.accept('q', sys.exit)
-        self.accept('w', self.toggle_wireframe)
-        self.accept('t', self.toggle_texture)
-        self.accept('n', self.toggle_normal_maps)
-        self.accept('e', self.toggle_emission_maps)
-        self.accept('o', self.toggle_occlusion_maps)
-        self.accept('a', self.toggle_ambient_light)
-        self.accept('shift-l', self.model_root.ls)
-        self.accept('shift-a', self.model_root.analyze)
+        self.accept("escape", sys.exit)
+        self.accept("q", sys.exit)
+        self.accept("w", self.toggle_wireframe)
+        self.accept("t", self.toggle_texture)
+        self.accept("n", self.toggle_normal_maps)
+        self.accept("e", self.toggle_emission_maps)
+        self.accept("o", self.toggle_occlusion_maps)
+        self.accept("a", self.toggle_ambient_light)
+        self.accept("shift-l", self.model_root.ls)
+        self.accept("shift-a", self.model_root.analyze)
 
         self.model_root.reparent_to(self.render)
 
@@ -61,23 +62,23 @@ class App(ShowBase):
         trackball.setForwardScale(distance * 0.006)
 
         # Create a light if the model does not have one
-        if not self.model_root.find('**/+Light'):
-            self.light = self.render.attach_new_node(p3d.PointLight('light'))
+        if not self.model_root.find("**/+Light"):
+            self.light = self.render.attach_new_node(p3d.PointLight("light"))
             self.light.set_pos(0, -distance, distance)
             self.render.set_light(self.light)
 
         # Move lights to render
         self.model_root.clear_light()
-        for light in self.model_root.find_all_matches('**/+Light'):
+        for light in self.model_root.find_all_matches("**/+Light"):
             light.parent.wrt_reparent_to(self.render)
             self.render.set_light(light)
 
         # Add some ambient light
-        self.ambient = self.render.attach_new_node(p3d.AmbientLight('ambient'))
-        self.ambient.node().set_color((.2, .2, .2, 1))
+        self.ambient = self.render.attach_new_node(p3d.AmbientLight("ambient"))
+        self.ambient.node().set_color((0.2, 0.2, 0.2, 1))
         self.render.set_light(self.ambient)
 
-        if self.model_root.find('**/+Character'):
+        if self.model_root.find("**/+Character"):
             self.anims = p3d.AnimControlCollection()
             p3d.autoBind(self.model_root.node(), self.anims, ~0)
             if self.anims.get_num_anims() > 0:
@@ -98,8 +99,53 @@ class App(ShowBase):
         else:
             self.render.set_light(self.ambient)
 
+
 def main():
     App().run()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
+
+# if __name__ == "__main__":
+#     print("loading")
+
+#     _world = ShowBase(fStartDirect=True)
+#     _world.accept("escape", sys.exit)
+
+#     _world.camera.setPos(0.1, 0.1, 0.1)
+#     # _world.camera.setPos(0.2,0.4,0.2)
+#     _world.camera.lookAt(0, 0, 0)
+#     _world.camLens.setNear(0.01)
+#     # _world.disableMouse()
+#     _world.setFrameRateMeter(True)
+
+#     alight = AmbientLight("alight")
+#     alight.setColor((1, 1, 1, 1))
+#     alnp = _world.render.attachNewNode(alight)
+#     _world.render.setLight(alnp)
+
+#     dlight = DirectionalLight("dlight")
+#     dlight.setColor((0.3, 0.3, 0.3, 1))
+#     dlnp = _world.render.attachNewNode(dlight)
+#     _world.render.setLight(dlnp)
+
+#     main_node = _world.render.attachNewNode(f"main")
+
+#     filename = Filename.fromOsSpecific("duck.glb")
+#     if len(sys.argv) > 1 and sys.argv[1].endswith("glb"):
+#         filename = Filename.fromOsSpecific(sys.argv[1])
+
+#     try:
+#         print("loading glb")
+
+#         # load_model(filename)
+#         model = _world.loader.loadModel(filename)
+#         print("done")
+#         model.setPos(0, 0, 0)
+#         model.reparentTo(main_node)
+#         _world.run()
+#     except RuntimeError:
+#         traceback.print_exc()
+
+#     print("exit")
