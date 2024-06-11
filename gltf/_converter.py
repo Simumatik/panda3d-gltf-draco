@@ -97,13 +97,6 @@ from panda3d.core import (
     AlphaTestAttrib,
     TransparencyAttrib,
 )
-import pathlib
-print("_converter: ", pathlib.Path(__file__))
-try:
-    with open("/home/bara/src/simumatik/panda3dtest/test2.log", "w") as f:
-        f.write("hej2")
-except Exception as e:
-    print(e)
 
 import panda3d.core as p3d
 
