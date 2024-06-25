@@ -72,5 +72,23 @@
             "args": "tests/models/duck.glb",
             "justMyCode": false
         },
+        {
+            "name": "Python Debugger: Power Supply (optimized)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/power_supply.glb",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Work table (optimized)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/table_optimized.glb",
+            "justMyCode": false
+        },
     ]
 }

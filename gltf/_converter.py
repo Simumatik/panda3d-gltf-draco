@@ -21,6 +21,7 @@ from panda3d.core import (
     Light,
     LQuaternion,
     LMatrix4,
+    LMatrix4d,
     LVecBase4,
     LVector3,
     LVector3f,
@@ -58,6 +59,7 @@ from panda3d.core import (
     LPoint3,
     LVector2,
     LVector4,
+    LVector3d,
     Material,
     MaterialAttrib,
     PartGroup,
@@ -287,7 +289,7 @@ class Converter:
         33648: SamplerState.WM_mirror,
     }
 
-    _MIN_SCALE_THRESHOLD = 0.01
+    _MIN_SCALE_THRESHOLD = 0.001
 
     def __init__(self, filepath, settings=None):
         if not isinstance(filepath, Filename):
@@ -372,17 +374,41 @@ class Converter:
         def get_node_transform(gltf_node):
             if "matrix" in gltf_node:
                 gltf_mat = LMatrix4(*gltf_node.get("matrix"))
+                print("has matrix")
             else:
                 gltf_mat = LMatrix4(LMatrix4.ident_mat())
+                print("node: ", gltf_node)
                 if "scale" in gltf_node:
-                    scale_mat = LVector3f(*gltf_node["scale"])
+                    print("scale from gltf: ", gltf_node["scale"])
+                    factor = 1.75
+                    scale_mat = LVector3(gltf_node["scale"][0] * factor, gltf_node["scale"][1] * factor, gltf_node["scale"][2]* factor) 
+                    #LMatrix4.scaleMat(gltf_node["scale"][0]*10)
+                    
+                    print( scale_mat )
+                    #scale_mat = LVector3(*gltf_node["scale"])
+                    #import numpy as np
+                    #scale_mat = LVector3(np.float32(gltf_node["scale"][0]), np.float32(gltf_node["scale"][0]), np.float32(gltf_node["scale"][2]))
+                    print( "Scale as regular: ", scale_mat)
+                    
+                    # print( "Scale as float32: ", np.float32(gltf_node["scale"][0]).tobytes())
+                    # print( "Scale as float64: ", np.float64(gltf_node["scale"][0]).tobytes())
+                    
+                    #print("original: ", scale_mat)
+                    # scale_mat = LVector3f(0.0000610388815, 0.0000610388815, 0.0000610388815)
+                    # print("hardcoded: ", scale_mat)
 
+                    # print( "Scale matrix from gltf: ", gltf_node["scale"] )
+                    # print( "Scale matrix from gltf split: ", *gltf_node["scale"] )
+                    # print( "Scale matrix as vector3f: ", scale_mat )
                     # Some models have such a small scale value that it essentially causes a linmath singularity.
                     # To be safe, we clamp the value here (uniform accross all axes).
-                    if scale_mat.x < self._MIN_SCALE_THRESHOLD or scale_mat.y < self._MIN_SCALE_THRESHOLD or scale_mat.z < self._MIN_SCALE_THRESHOLD:
-                        scale_mat.fill(self._MIN_SCALE_THRESHOLD)
-
-                    gltf_mat.set_scale_mat(scale_mat)
+                    #if scale_mat.x < self._MIN_SCALE_THRESHOLD or scale_mat.y < self._MIN_SCALE_THRESHOLD or scale_mat.z < self._MIN_SCALE_THRESHOLD:
+                    #    print("below threshold")
+                    #    scale_mat.fill(self._MIN_SCALE_THRESHOLD)
+                    # print("isnan: ", gltf_mat.isNan())
+                    #gltf_mat *= scale_mat
+                    gltf_mat.setScaleMat(scale_mat)
+                    # print("isnan: ", gltf_mat.isNan())
 
                 if "rotation" in gltf_node:
                     rot_mat = LMatrix4()
@@ -393,9 +419,25 @@ class Converter:
 
                 if "translation" in gltf_node:
                     gltf_mat *= LMatrix4.translate_mat(*gltf_node["translation"])
+                    print("translation: ",gltf_node["translation"])
+            print("before: ", TransformState.getNumStates() )
+            state = TransformState.make_mat(self.csxform_inv * gltf_mat * self.csxform)
+            print("after: ", TransformState.getNumStates() )
+            # print(f"State {state}")
+            # print(f"has_mat() {state.hasMat()}")
+            # print(f"getMat()\n{state.getMat()}")
+            # print(f"isInvalid() {state.isInvalid()}")
+            # print(f"isSingular() {state.isSingular()}")
 
+            # inverse = state.getInverse()
+            # print(f"Inverse {inverse}")
+            # print(f"has_mat() {inverse.hasMat()}")
+            # print(f"has_mat()\n{inverse.getMat()}")
+            # print(f"isInvalid() {inverse.isInvalid()}")
+            # print(f"isSingular() {inverse.isSingular()}")
             
-            return TransformState.make_mat(self.csxform_inv * gltf_mat * self.csxform)
+
+            return state
 
         def build_characters(nodeid):
             try:
@@ -597,7 +639,7 @@ class Converter:
             # Check if we need to deal with negative scale values
             scale = panda_node.get_transform().get_scale()
             negscale = scale.x * scale.y * scale.z < 0
-
+            print( "Scale: ", scale )
             if negscale:
                 for geomnode in np.find_all_matches("**/+GeomNode"):
                     tmp = geomnode.get_parent().attach_new_node(
@@ -1139,7 +1181,8 @@ class Converter:
         calc_normals = not "NORMAL" in mesh_attribs
         calc_tangents = not "TANGENT" in mesh_attribs
         normalize_weights = False
-
+        rescale_vertices = False 
+        vertex_length = None
         for buffview, accs in itertools.groupby(
             accessors, key=lambda x: x["bufferView"]
         ):
@@ -1169,9 +1212,32 @@ class Converter:
                 content = self._ATTRIB_CONTENT_MAP.get(attrib_name, GeomEnums.C_other)
                 size = numeric_size * num_components
                 
+                
                 if "_target" in acc:
                     internal_name = InternalName.get_morph(attrib_name, acc["_target"])
                     content = GeomEnums.C_morph_delta
+
+                if internal_name == InternalName.get_vertex(): 
+                    
+                    vertex_min = acc["min"]
+                    vertex_max = acc["max"]
+                    vertex_max_length = max([vertex_max[0] - vertex_min[0], vertex_max[1] - vertex_min[1], vertex_max[2] - vertex_min[2]])
+                    
+                    vertex_length = [
+                        vertex_max_length,
+                        vertex_max_length,
+                        vertex_max_length
+                    ]
+                    
+                    #for node in gltf_data["node"] :
+                    #    print(node)
+
+                    #print (gltf_data["nodes"][0])
+                    #print( 1 / gltf_data["nodes"][0]["scale"][0] )
+                    
+                    rescale_vertices = numeric_type != GeomEnums.NT_float32 or vertex_max_length > 1.0
+                    print(vertex_length)
+                    print(acc)
 
                 # Add this accessor as a column to the current vertex array format
                 varray.add_column(internal_name, num_components, numeric_type, content)
@@ -1235,7 +1301,7 @@ class Converter:
                     dest += dest_stride
                     src += stride
             handle = None
-
+        
         # Flip UVs
         num_uvs = len(
             {i for i in gltf_primitive["attributes"] if i.startswith("TEXCOORD")}
@@ -1296,7 +1362,7 @@ class Converter:
             InternalName.get_transform_weight(),
             InternalName.get_transform_blend(),
         )
-
+        
         for arr in reg_format.get_arrays():
             for column in arr.get_columns():
                 column_name = column.get_name()
@@ -1310,7 +1376,7 @@ class Converter:
                 else:
                     varray = varray_vert
 
-                if( column_name.name in ('vertex') ):
+                if( column_name == InternalName.get_vertex()):
                     # Convert vertices to float
                     varray.add_column(
                         column_name,
@@ -1347,9 +1413,12 @@ class Converter:
 
         if targets:
             vformat.add_array(varray_morph)
-        
+                
         reg_format = GeomVertexFormat.register_format(vformat)
         vdata = vdata.convert_to(reg_format)
+
+        print("FORMAT: ", vformat)
+        print( vdata )
 
         # Construct primitive
         primitiveid = geom_node.get_num_geoms()
@@ -1416,12 +1485,59 @@ class Converter:
         geom = Geom(vdata)
         geom.add_primitive(prim)
 
+        if rescale_vertices:
+            pass
+            #print("rescaling vertices")
+            #self.scale_vertices(geom, vertex_length)
+
         if calc_normals:
             self.calculate_normals(geom)
+
         if calc_tangents:
             self.calculate_tangents(geom)
+
         geom.transform_vertices(self.csxform)
         geom_node.add_geom(geom, mat)
+
+    def scale_vertices(self, geom, vertex_length):
+        original_vertex_data = geom.get_vertex_data()
+        new_vertex_data = original_vertex_data.replace_column(
+             InternalName.get_vertex(), 3, GeomEnums.NT_float32, GeomEnums.C_point
+         )
+        
+        vertex_reader = GeomVertexReader(original_vertex_data, "vertex")
+        new_vertex_writer = GeomVertexWriter(new_vertex_data, "vertex")
+
+        read_vertex = vertex_reader.get_data3
+        write_vertex = new_vertex_writer.set_data3
+
+        while not vertex_reader.is_at_end():
+            vtx1 = read_vertex()
+            #print("Vertex: ", vtx1)
+            scaledVertex = [
+                    vtx1[0] / vertex_length[0],
+                    vtx1[1] / vertex_length[1],
+                    vtx1[2] / vertex_length[2]
+                ]
+            #print("Scaled vertex: ", scaledVertex)
+            write_vertex(scaledVertex[0], scaledVertex[1], scaledVertex[2])
+
+        geom.set_vertex_data(new_vertex_data)
+    
+        # vertexComponent = GeomEnums.NT_float32
+        # if vertexComponent != GeomEnums.NT_float32:
+        #     print("fulfix")
+        #     vertexRewriter = GeomVertexRewriter(vdata, InternalName.get_vertex())
+        #     while not vertexRewriter.isAtEnd():
+        #         vertex = vertexRewriter.getData3()
+        #         print("Vertex: ", vertex)
+        #         scaledVertex = [
+        #             vertex[0] / 65535.0,
+        #             vertex[1] / 65535.0,
+        #             vertex[2] / 65535.0
+        #         ]
+        #         print("Scaled vertex: ", scaledVertex)
+        #         vertexRewriter.setData3(scaledVertex[0], scaledVertex[1], scaledVertex[2])
 
     def calculate_normals(self, geom):
         # Generate flat normals, as required by the glTF spec.

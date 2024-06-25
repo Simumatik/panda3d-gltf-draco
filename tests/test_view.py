@@ -16,7 +16,6 @@ p3d.load_prc_file_data(
     "texture-anisotropic-degree 16\n",
 )
 
-
 class App(ShowBase):
     def __init__(self):
         if len(sys.argv) < 2:
@@ -43,46 +42,48 @@ class App(ShowBase):
         self.accept("shift-l", self.model_root.ls)
         self.accept("shift-a", self.model_root.analyze)
 
-        self.model_root.reparent_to(self.render)
+        main_node = self.render.attachNewNode(f"main")
 
-        bounds = self.model_root.getBounds()
-        center = bounds.get_center()
-        if bounds.is_empty():
-            radius = 1
-        else:
-            radius = bounds.get_radius()
+        self.model_root.reparent_to(main_node)
 
+        # bounds = self.model_root.getBounds()
+        # center = bounds.get_center()
+        # if bounds.is_empty():
+        #     radius = 1
+        # else:
+        #     radius = bounds.get_radius()
+        radius = 1
         fov = self.camLens.get_fov()
         distance = radius / math.tan(math.radians(min(fov[0], fov[1]) / 2.0))
         self.camLens.set_near(min(self.camLens.get_default_near(), radius / 2))
         self.camLens.set_far(max(self.camLens.get_default_far(), distance + radius * 2))
-        trackball = self.trackball.node()
-        trackball.set_origin(center)
-        trackball.set_pos(0, distance, 0)
-        trackball.setForwardScale(distance * 0.006)
+        # trackball = self.trackball.node()
+        # trackball.set_origin(center)
+        # trackball.set_pos(0, distance, 0)
+        # trackball.setForwardScale(distance * 0.006)
 
         # Create a light if the model does not have one
-        if not self.model_root.find("**/+Light"):
-            self.light = self.render.attach_new_node(p3d.PointLight("light"))
-            self.light.set_pos(0, -distance, distance)
-            self.render.set_light(self.light)
+        # if not self.model_root.find("**/+Light"):
+        #     self.light = self.render.attach_new_node(p3d.PointLight("light"))
+        #     self.light.set_pos(0, -distance, distance)
+        #     self.render.set_light(self.light)
 
-        # Move lights to render
-        self.model_root.clear_light()
-        for light in self.model_root.find_all_matches("**/+Light"):
-            light.parent.wrt_reparent_to(self.render)
-            self.render.set_light(light)
+        # # Move lights to render
+        # self.model_root.clear_light()
+        # for light in self.model_root.find_all_matches("**/+Light"):
+        #     light.parent.wrt_reparent_to(self.render)
+        #     self.render.set_light(light)
 
         # Add some ambient light
         self.ambient = self.render.attach_new_node(p3d.AmbientLight("ambient"))
         self.ambient.node().set_color((0.2, 0.2, 0.2, 1))
         self.render.set_light(self.ambient)
 
-        if self.model_root.find("**/+Character"):
-            self.anims = p3d.AnimControlCollection()
-            p3d.autoBind(self.model_root.node(), self.anims, ~0)
-            if self.anims.get_num_anims() > 0:
-                self.anims.get_anim(0).loop(True)
+        # if self.model_root.find("**/+Character"):
+        #     self.anims = p3d.AnimControlCollection()
+        #     p3d.autoBind(self.model_root.node(), self.anims, ~0)
+        #     if self.anims.get_num_anims() > 0:
+        #         self.anims.get_anim(0).loop(True)
 
     def toggle_normal_maps(self):
         self.pipeline.use_normal_maps = not self.pipeline.use_normal_maps
@@ -101,7 +102,12 @@ class App(ShowBase):
 
 
 def main():
-    App().run()
+    try:
+        App().run()
+    except AssertionError as e:
+        print("madderfacking assertion error", e)
+        import traceback
+        traceback.print_exception(e)
 
 
 if __name__ == "__main__":
