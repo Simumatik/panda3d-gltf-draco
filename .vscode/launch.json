@@ -90,5 +90,14 @@
             "args": "tests/models/table_optimized.glb",
             "justMyCode": false
         },
+        {
+            "name": "Python Debugger: Original case",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/original_case.glb",
+            "justMyCode": false
+        },
     ]
 }

@@ -30,7 +30,16 @@ class App(ShowBase):
         self.models = []
         main_node = self.render.attachNewNode(f"main")
 
-        files = sys.argv[1:]
+        arguments = sys.argv[1:]
+
+        options = []
+        files = []
+        while len(arguments) > 0:
+            arg = arguments.pop(0)
+            if arg.startswith("-") or arg.startswith("--"):
+                options.append(arg)
+            else:
+                files.append(arg)
 
         try:
             biggestRadius = 0.01
@@ -48,13 +57,14 @@ class App(ShowBase):
             print("EXCEPTION", e)
 
         
-        startx = 0
-        step = 1
-        print("biggest radius", biggestRadius)
-        for model in self.models:
-            model.setPos(startx, 0, 0)
-            print ( model.getBounds() )
-            startx = startx + biggestRadius + step
+        if "--no-translation" not in options:
+            startx = 0
+            step = 1
+            print("biggest radius", biggestRadius)
+            for model in self.models:
+                model.setPos(startx, 0, 0)
+                print ( model.getBounds() )
+                startx = startx + biggestRadius + step
 
         #self.model_root = self.loader.load_model(infile, noCache=True)
 

@@ -419,6 +419,8 @@ class Converter:
             except IndexError:
                 print("Could not find node with index: {}".format(nodeid))
                 return
+            
+            print(gltf_node)
 
             skinid = self.skeletons.get(nodeid, None)
             charinfo = self.characters.get(skinid, None)
@@ -467,18 +469,72 @@ class Converter:
                     write_vertex(*decoded_vertex)
 
                 geom.set_vertex_data(new_vertex_data)
+                
+
+            # def dequantize_normals(geom):
+            #     original_vertex_data = geom.get_vertex_data()
+            #     print(original_vertex_data)
+            #     new_vertex_data = original_vertex_data.replace_column(
+            #         InternalName.get_normal(), 3, GeomEnums.NT_float32, GeomEnums.C_point
+            #     )
+                
+            #     original_vertex_format = original_vertex_data.getFormat()
+
+            #     normal_format = original_vertex_format.getColumn(InternalName.get_normal())
+            #     numeric_type = normal_format.get_numeric_type()
+
+            #     # https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_mesh_quantization/README.md#encoding-quantized-data
+            #     # Numeric Type:         accessor.componentType	    int-to-float	                    float-to-int
+            #     # GeomEnums.NT_int8     5120 (BYTE)	                f = max(c / 127.0, -1.0)	        c = round(f * 127.0)
+            #     # GeomEnums.NT_uint8    5121 (UNSIGNED_BYTE)	    f = c / 255.0	                    c = round(f * 255.0)
+            #     # GeomEnums.NT_int16    5122 (SHORT)	            f = max(c / 32767.0, -1.0)	        c = round(f * 32767.0)
+            #     # GeomEnums.NT_uint16   5123 (UNSIGNED_SHORT)	    f = c / 65535.0	                    c = round(f * 65535.0)
+
+            #     if numeric_type == GeomEnums.NT_int8: 
+            #         decode_quantization = lambda c: max( c / 127.0, -1.0 )
+            #     elif numeric_type == GeomEnums.NT_uint8: 
+            #         decode_quantization = lambda c: c / 255.0
+            #     elif numeric_type == GeomEnums.NT_int16: 
+            #         decode_quantization = lambda c: max( c / 32767.0, -1.0 )
+            #     elif numeric_type == GeomEnums.NT_uint16: 
+            #         decode_quantization = lambda c: c / 65535.0
+            #     else:
+            #         raise ValueError("Unexpected numeric type for normals")
+                
+            #     vertex_reader = GeomVertexReader(original_vertex_data, InternalName.get_normal())
+            #     new_vertex_writer = GeomVertexWriter(new_vertex_data, InternalName.get_normal())
+
+            #     read_vertex = vertex_reader.get_data3
+            #     write_vertex = new_vertex_writer.set_data3
+
+            #     while not vertex_reader.is_at_end():
+            #         original_vertex = read_vertex()
+            #         #print("Vertex: ", original_vertex)
+            #         decoded_vertex = [
+            #                 decode_quantization( original_vertex[0] ),
+            #                 decode_quantization( original_vertex[1] ),
+            #                 decode_quantization( original_vertex[2] )
+            #             ]
+            #         #print("Decoded vertex: ", decoded_vertex)
+            #         write_vertex(*decoded_vertex)
+
+            #     geom.set_vertex_data(new_vertex_data)
 
             if "mesh" in gltf_node:
                 meshid = gltf_node["mesh"]
 
                 gltf_mesh = gltf_data["meshes"][meshid]
                 mesh = self.meshes[meshid]
-                
-                if self.uses_mesh_quantization:
+
+                # TODO: fix issue with reused meshes already being scaled (the original should simply be copied and scaled each time _if_possible)
+                if self.uses_mesh_quantization and not "already_scaled" in gltf_mesh:
+
                     scale = gltf_node["scale"]
                     for geom_index in range( mesh.getNumGeoms() ):
                         geom = mesh.modifyGeom(geom_index) 
                         scale_geom(geom, scale)
+
+                    gltf_mesh["already_scaled"] = True
 
                 charinfo = None
                 if "skin" in gltf_node:
@@ -659,6 +715,7 @@ class Converter:
 
             # Now iterate again to build the scene graph
             for nodeid in node_list:
+                print(f"node {nodeid}")
                 add_node(scene_root, gltf_scene, nodeid)
 
             if self.settings.flatten_nodes:
@@ -1195,10 +1252,7 @@ class Converter:
                 numeric_size = self._COMPONENT_SIZE_MAP[acc["componentType"]]
                 content = self._ATTRIB_CONTENT_MAP.get(attrib_name, GeomEnums.C_other)
                 size = numeric_size * num_components
-                
-                if "normal" in attrib_name:
-                    continue
-                
+                print(acc)
                 if "_target" in acc:
                     internal_name = InternalName.get_morph(attrib_name, acc["_target"])
                     content = GeomEnums.C_morph_delta
@@ -1446,7 +1500,7 @@ class Converter:
         geom = Geom(vdata)
         geom.add_primitive(prim)
 
-        if not calc_normals:
+        if calc_normals:
             self.calculate_normals(geom)
 
         if calc_tangents:
@@ -1558,12 +1612,13 @@ class Converter:
     def load_mesh(self, meshid, gltf_mesh, gltf_data):
         mesh_name = gltf_mesh.get("name", "mesh" + str(meshid))
         node = self.meshes.get(meshid, GeomNode(mesh_name))
-
+        print(f"loading mesh {meshid}")
         # Clear any existing mesh data
         node.remove_all_geoms()
 
         # Load primitives
         for gltf_primitive in gltf_mesh["primitives"]:
+            print("loading primitive")
             self.load_primitive(node, gltf_primitive, gltf_mesh, gltf_data)
 
         # Save mesh
