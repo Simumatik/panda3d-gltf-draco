@@ -32,23 +32,27 @@ class App(ShowBase):
 
         files = sys.argv[1:]
 
-        biggestRadius = 0.01
-        while files: 
-            file = files.pop(0)
-            print(file)
-            infile = p3d.Filename.from_os_specific(os.path.abspath(file))
-            print("infile: ", infile)
-            p3d.get_model_path().prepend_directory(infile.get_dirname())
-            model = self.loader.load_model(infile, noCache=True)
-            model.reparent_to(main_node)
-            biggestRadius = max( biggestRadius, model.getBounds().getRadius() )
-            self.models.append(model)
+        try:
+            biggestRadius = 0.01
+            while files: 
+                file = files.pop(0)
+                print(file)
+                infile = p3d.Filename.from_os_specific(os.path.abspath(file))
+                print("infile: ", infile)
+                p3d.get_model_path().prepend_directory(infile.get_dirname())
+                model = self.loader.load_model(infile, noCache=True)
+                model.reparent_to(main_node)
+                biggestRadius = max( biggestRadius, model.getBounds().getRadius() )
+                self.models.append(model)
+        except Exception as e:
+            print("EXCEPTION", e)
+
         
         startx = 0
         step = 1
         print("biggest radius", biggestRadius)
         for model in self.models:
-            #model.setPos(startx, 0, 0)
+            model.setPos(startx, 0, 0)
             print ( model.getBounds() )
             startx = startx + biggestRadius + step
 
@@ -111,18 +115,6 @@ class App(ShowBase):
         #     p3d.autoBind(self.model_root.node(), self.anims, ~0)
         #     if self.anims.get_num_anims() > 0:
         #         self.anims.get_anim(0).loop(True)
-
-        print( p3d.TransformState.getNumStates() )
-        print( p3d.TransformState.getNumUnusedStates() )
-        for state in p3d.TransformState.getStates():
-            print( f"State\n{state}")
-            try: 
-                print("Is singular?", state.isSingular())
-                print("Has mat?", state.hasMat())
-                
-            except:
-                print("Exception")
-            print()
             
     def toggle_normal_maps(self):
         self.pipeline.use_normal_maps = not self.pipeline.use_normal_maps
