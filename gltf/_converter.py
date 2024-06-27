@@ -469,57 +469,7 @@ class Converter:
                     write_vertex(*decoded_vertex)
 
                 geom.set_vertex_data(new_vertex_data)
-                
-
-            # def dequantize_normals(geom):
-            #     original_vertex_data = geom.get_vertex_data()
-            #     print(original_vertex_data)
-            #     new_vertex_data = original_vertex_data.replace_column(
-            #         InternalName.get_normal(), 3, GeomEnums.NT_float32, GeomEnums.C_point
-            #     )
-                
-            #     original_vertex_format = original_vertex_data.getFormat()
-
-            #     normal_format = original_vertex_format.getColumn(InternalName.get_normal())
-            #     numeric_type = normal_format.get_numeric_type()
-
-            #     # https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_mesh_quantization/README.md#encoding-quantized-data
-            #     # Numeric Type:         accessor.componentType	    int-to-float	                    float-to-int
-            #     # GeomEnums.NT_int8     5120 (BYTE)	                f = max(c / 127.0, -1.0)	        c = round(f * 127.0)
-            #     # GeomEnums.NT_uint8    5121 (UNSIGNED_BYTE)	    f = c / 255.0	                    c = round(f * 255.0)
-            #     # GeomEnums.NT_int16    5122 (SHORT)	            f = max(c / 32767.0, -1.0)	        c = round(f * 32767.0)
-            #     # GeomEnums.NT_uint16   5123 (UNSIGNED_SHORT)	    f = c / 65535.0	                    c = round(f * 65535.0)
-
-            #     if numeric_type == GeomEnums.NT_int8: 
-            #         decode_quantization = lambda c: max( c / 127.0, -1.0 )
-            #     elif numeric_type == GeomEnums.NT_uint8: 
-            #         decode_quantization = lambda c: c / 255.0
-            #     elif numeric_type == GeomEnums.NT_int16: 
-            #         decode_quantization = lambda c: max( c / 32767.0, -1.0 )
-            #     elif numeric_type == GeomEnums.NT_uint16: 
-            #         decode_quantization = lambda c: c / 65535.0
-            #     else:
-            #         raise ValueError("Unexpected numeric type for normals")
-                
-            #     vertex_reader = GeomVertexReader(original_vertex_data, InternalName.get_normal())
-            #     new_vertex_writer = GeomVertexWriter(new_vertex_data, InternalName.get_normal())
-
-            #     read_vertex = vertex_reader.get_data3
-            #     write_vertex = new_vertex_writer.set_data3
-
-            #     while not vertex_reader.is_at_end():
-            #         original_vertex = read_vertex()
-            #         #print("Vertex: ", original_vertex)
-            #         decoded_vertex = [
-            #                 decode_quantization( original_vertex[0] ),
-            #                 decode_quantization( original_vertex[1] ),
-            #                 decode_quantization( original_vertex[2] )
-            #             ]
-            #         #print("Decoded vertex: ", decoded_vertex)
-            #         write_vertex(*decoded_vertex)
-
-            #     geom.set_vertex_data(new_vertex_data)
-
+    
             if "mesh" in gltf_node:
                 meshid = gltf_node["mesh"]
 
@@ -1252,7 +1202,7 @@ class Converter:
                 numeric_size = self._COMPONENT_SIZE_MAP[acc["componentType"]]
                 content = self._ATTRIB_CONTENT_MAP.get(attrib_name, GeomEnums.C_other)
                 size = numeric_size * num_components
-                print(acc)
+
                 if "_target" in acc:
                     internal_name = InternalName.get_morph(attrib_name, acc["_target"])
                     content = GeomEnums.C_morph_delta
@@ -1381,6 +1331,8 @@ class Converter:
             InternalName.get_transform_blend(),
         )
         
+        quantized_normals = False
+        quantized_normal_type = None
         for arr in reg_format.get_arrays():
             for column in arr.get_columns():
                 column_name = column.get_name()
@@ -1401,6 +1353,16 @@ class Converter:
                         column.get_num_components(),
                         GeomEnums.NT_float32,
                         GeomEnums.C_point,
+                    )
+                elif( column_name == InternalName.get_normal()):
+                    # Convert normals to float
+                    quantized_normals = column.get_numeric_type() != GeomEnums.NT_float32
+                    quantized_normal_type = column.get_numeric_type()
+                    varray.add_column(
+                        column_name,
+                        column.get_num_components(),
+                        GeomEnums.NT_float32,
+                        GeomEnums.C_normal,
                     )
                 else:
                     varray.add_column(
@@ -1500,8 +1462,12 @@ class Converter:
         geom = Geom(vdata)
         geom.add_primitive(prim)
 
+
         if calc_normals:
             self.calculate_normals(geom)
+        elif quantized_normals:
+            print("Dequantizing normals")
+            self.dequantize_normals(geom, quantized_normal_type)
 
         if calc_tangents:
             self.calculate_tangents(geom)
@@ -1540,6 +1506,52 @@ class Converter:
             write_normal(normal)
 
         geom.set_vertex_data(gvd)
+
+    def dequantize_normals(self, geom, normal_numeric_type):
+        original_vertex_data = geom.get_vertex_data()
+        print(original_vertex_data)
+        new_vertex_data = original_vertex_data.replace_column(
+            InternalName.get_normal(), 3, GeomEnums.NT_float32, GeomEnums.C_normal
+        )
+        
+        # https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_mesh_quantization/README.md#encoding-quantized-data
+        # Numeric Type:         accessor.componentType	    int-to-float	                    float-to-int
+        # GeomEnums.NT_int8     5120 (BYTE)	                f = max(c / 127.0, -1.0)	        c = round(f * 127.0)
+        # GeomEnums.NT_uint8    5121 (UNSIGNED_BYTE)	    f = c / 255.0	                    c = round(f * 255.0)
+        # GeomEnums.NT_int16    5122 (SHORT)	            f = max(c / 32767.0, -1.0)	        c = round(f * 32767.0)
+        # GeomEnums.NT_uint16   5123 (UNSIGNED_SHORT)	    f = c / 65535.0	                    c = round(f * 65535.0)
+
+        if normal_numeric_type == GeomEnums.NT_int8: 
+            decode_quantization = lambda c: max( c / 127.0, -1.0 )
+        elif normal_numeric_type == GeomEnums.NT_uint8: 
+            decode_quantization = lambda c: c / 255.0
+        elif normal_numeric_type == GeomEnums.NT_int16: 
+            decode_quantization = lambda c: max( c / 32767.0, -1.0 )
+        elif normal_numeric_type == GeomEnums.NT_uint16: 
+            decode_quantization = lambda c: c / 65535.0
+        else:
+            raise ValueError("Unexpected numeric type for normals")
+        
+        vertex_reader = GeomVertexReader(original_vertex_data, InternalName.get_normal())
+        new_vertex_writer = GeomVertexWriter(new_vertex_data, InternalName.get_normal())
+
+        read_vertex = vertex_reader.get_data3
+        write_vertex = new_vertex_writer.set_data3
+
+        while not vertex_reader.is_at_end():
+            original_vertex = read_vertex()
+            #print("Vertex: ", original_vertex)
+
+            dequantized_normal = LVector3(
+                decode_quantization( original_vertex[0] ),
+                decode_quantization( original_vertex[1] ),
+                decode_quantization( original_vertex[2] )
+            )
+            dequantized_normal.normalize()
+            #print("Decoded vertex: ", decoded_vertex)
+            write_vertex(dequantized_normal)
+
+        geom.set_vertex_data(new_vertex_data)
 
     def calculate_tangents(self, geom):
         # Adapted from https://www.marti.works/calculating-tangents-for-your-mesh/
