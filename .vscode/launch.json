@@ -99,5 +99,23 @@
             "args": "tests/models/original_case.glb",
             "justMyCode": false
         },
+        {
+            "name": "Python Debugger: Quantized Duck (glTF)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/QuantizedDuck.gltf",
+            "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: Original Duck (glTF)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/test_view.py",
+            "console": "integratedTerminal",
+            "args": "tests/models/OriginalDuck.gltf",
+            "justMyCode": false
+        },
     ]
 }

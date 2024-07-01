@@ -2,6 +2,7 @@ import sys
 import os
 import math
 from direct.showbase.ShowBase import ShowBase
+from direct.gui.OnscreenText import OnscreenText
 
 import panda3d.core as p3d
 import simplepbr
@@ -23,16 +24,36 @@ class App(ShowBase):
 
         super().__init__()
 
+        # Initial setup
         self.pipeline = simplepbr.init()
+
+        ## Setup collision handling
+        self.traverser = self.cTrav = p3d.CollisionTraverser('collision_traverser')
+        self.picker_collision_handler = p3d.CollisionHandlerQueue()
+        self.picker = p3d.CollisionNode('mouser_ray')
+        self.picker_node = self.camera.attach_new_node(self.picker)
+        self.picker.set_from_collide_mask(p3d.GeomNode.get_default_collide_mask())
+        
+        self.picker_ray = p3d.CollisionRay()
+        self.picker.add_solid( self.picker_ray )
+        self.traverser.add_collider(self.picker_node, self.picker_collision_handler)
+
         self.models = []
-        self.main_node = self.render.attachNewNode(f"main")
+        self.main_node = self.render.attach_new_node(f"main")
 
-        origin_axis = self.create_unit_axis_node()
-        self.origin = self.render.attachNewNode( origin_axis )
-         
+        self.origin_axis = self.create_axis_lines()
+        self.origin_node = p3d.NodePath( self.origin_axis )
 
+        self.selected_model = None
+        self.selection_axis = self.create_axis_lines("selection_axis")
+        self.selection_axis_node = p3d.NodePath( self.selection_axis )
+
+        self.selected_model_text = OnscreenText(text='', pos=(0, 0), scale=0.07)
+        self.selected_model_text.setAlign(p3d.TextNode.ALeft)
+        self.selected_model_text.setTextPos(-1.28, 0.93)
+        
+        # Process script arguments
         arguments = sys.argv[1:]
-
         options = []
         files = []
         while len(arguments) > 0:
@@ -42,29 +63,23 @@ class App(ShowBase):
             else:
                 files.append(arg)
 
-        try:
-            biggestRadius = 0.01
-            while files: 
-                file = files.pop(0)
-                print(file)
-                infile = p3d.Filename.from_os_specific(os.path.abspath(file))
-                print("infile: ", infile)
-                p3d.get_model_path().prepend_directory(infile.get_dirname())
-                model = self.loader.load_model(infile, noCache=True)
-                model.reparent_to(self.main_node)
-                biggestRadius = max( biggestRadius, model.getBounds().getRadius() )
-                self.models.append(model)
-        except Exception as e:
-            print("EXCEPTION", e)
+        # Load any model files from script arguments
+        while files: 
+            file = files.pop(0)
+            infile = p3d.Filename.from_os_specific(os.path.abspath(file))
+            p3d.get_model_path().prepend_directory(infile.get_dirname())
+            model = self.loader.load_model(infile, noCache=True)
+            model.set_name( f"model-{infile.get_basename_wo_extension()}")
+            model.set_tag("pickable", 'true')
+            model.reparent_to(self.main_node)
+            self.models.append(model)
 
-        
+        # If multiple models was loaded, display them side by side (unless --no-translation was specified)
         if "--no-translation" not in options:
             startx = 0
-            #step = 1
             for model in self.models:
                 model.setPos(startx, 0, 0)
-                startx = startx + model.getBounds().getRadius() * 2
-                #startx = startx + biggestRadius + step
+                startx = startx + model.get_bounds().get_radius() * 2
 
         self.accept("escape", sys.exit)
         self.accept("q", sys.exit)
@@ -74,9 +89,13 @@ class App(ShowBase):
         self.accept("e", self.toggle_emission_maps)
         self.accept("o", self.toggle_occlusion_maps)
         self.accept("a", self.toggle_ambient_light)
+        self.accept("d", self.toggle_display_origin)
+        self.accept("tab", self.select_next_object)
         self.accept("p", self.print_camera_pos)
+        self.accept("mouse1", self.pick_object)
 
-        bounds = self.main_node.getBounds()
+        # Setup camera to fit the main node bounds withing its field of view
+        bounds = self.main_node.get_bounds()
         center = bounds.get_center()
         if bounds.is_empty():
             radius = 1
@@ -107,7 +126,7 @@ class App(ShowBase):
         self.ambient.node().set_color((0.2, 0.2, 0.2, 1))
         self.render.set_light(self.ambient)
 
-        self.set_camera_position(camera_position, lookAt=center)
+        self.set_camera_position(camera_position, look_at=center)
    
     def toggle_normal_maps(self):
         self.pipeline.use_normal_maps = not self.pipeline.use_normal_maps
@@ -124,36 +143,97 @@ class App(ShowBase):
         else:
             self.render.set_light(self.ambient)
 
+    def toggle_display_origin(self):       
+        if self.origin_node.is_singleton():
+            self.origin_node.reparent_to(self.render)
+        else:
+            self.origin_node.detach_node()
+
     def print_camera_pos(self):
         print( self.camera.getPos() )
 
-    def create_unit_axis_node(self, name="origin", length=1.0, thickness=5.0):
+    def create_axis_lines(self, name="origin", length=0.75, thickness=2.0):
         lines = LineSegs(name)
-        lines.setColor(1, 0, 0, 1)
-        lines.setThickness(thickness)
-        lines.moveTo(0, 0, 0)      
-        lines.drawTo(0, 0, length)
-        lines.setColor(0,1,0,1)
-        lines.moveTo(0,0,0)      
-        lines.drawTo(0, length, 0)
-        lines.setColor(0,0,1,1)
-        lines.moveTo(0,0,0)      
-        lines.drawTo(length,0,0)
+        lines.set_thickness(thickness)
+        # Draw X-axis
+        lines.set_color(1, 0, 0, 1) # red
+        lines.move_to(0, 0, 0)
+        lines.draw_to(length, 0, 0)
+        # Draw Y-axis
+        lines.set_color(0, 1, 0, 1) # green
+        lines.move_to(0, 0, 0)
+        lines.draw_to(0, length, 0)
+        # Draw Z-axis
+        lines.set_color(0, 0, 1, 1) # blue
+        lines.move_to(0, 0, 0)
+        lines.draw_to(0, 0, length)
         return lines.create()
 
-    def set_camera_position(self, position: LVector3 = LVector3(10, 0, 5), lookAt: LVector3 = LVector3(0,0,0)):
-        self.disableMouse()
+    def select_object_node(self, node):
+        if node is None or node not in self.models:
+            # Deselect if the user clicked something other than the models
+            self.selected_model = None
+            self.selection_axis_node.detach_node()
+            self.selected_model_text.setText("")
+            return
         
-        self.camera.setPos(position)
-        self.camera.lookAt(lookAt)
+        # Attach the axis node to the next model
+        self.selected_model = node
+        self.selection_axis_node.reparent_to(self.selected_model)
+        self.selected_model_text.setText(self.selected_model.name)
+
+    def select_next_object(self):
+        # Skip if no models
+        if not len ( self.models ):
+            return
+
+        # Get the first model if none is selected
+        if self.selected_model is None:
+            next_index = 0
+        else:
+            next_index = self.models.index(self.selected_model) + 1
+
+        if next_index == len( self.models ):
+            self.select_object_node(None)
+        else: 
+            self.select_object_node(self.models[ next_index ])
+
+    def pick_object(self):
+        if not self.mouseWatcherNode.has_mouse():
+            return
+        
+        mpos = self.mouseWatcherNode.getMouse()
+        self.picker_ray.set_from_lens(self.camNode, mpos.getX(), mpos.getY())
+        self.traverser.traverse(self.render)
+
+        # Assume for simplicity's sake that myHandler is a CollisionHandlerQueue.
+        if not self.picker_collision_handler.get_num_entries():
+            self.select_object_node(None)
+            return
+        
+        # This is so we get the closest object
+        self.picker_collision_handler.sort_entries()
+        picked_object = self.picker_collision_handler.get_entry(0).get_into_node_path()
+        picked_object = picked_object.find_net_tag('pickable')
+        
+        if not picked_object.is_empty():
+            self.select_object_node(picked_object)
+
+    def set_camera_position(self, position: LVector3 = LVector3(10, 0, 5), look_at: LVector3 = LVector3(0,0,0)):
+        # Disable mouse to stop it from resetting the camera matrix
+        self.disable_mouse()
+        
+        # Set the camera position and look-at vectors
+        self.camera.set_pos(position)
+        self.camera.look_at(look_at)
        
         # Copy the camera matrix
-        mat = LMatrix4(self.camera.getMat())
-        mat.invertInPlace()
+        mat = LMatrix4(self.camera.get_mat())
+        mat.invert_in_place()
 
         # Update the mouse transform
-        self.mouseInterfaceNode.setMat(mat)
-        self.enableMouse()
+        self.mouseInterfaceNode.set_mat(mat)
+        self.enable_mouse()
 
 def main():
     try:

@@ -282,7 +282,7 @@ class Converter:
         33648: SamplerState.WM_mirror,
     }
 
-    _MIN_SCALE_THRESHOLD = 0.001
+    _MIN_SCALE_THRESHOLD = 0.0001 # Rescale vertices for nodes with a scale component smaller than this to avoid singularities
 
     def __init__(self, filepath, settings=None):
         if not isinstance(filepath, Filename):
@@ -318,8 +318,6 @@ class Converter:
         self.active_camera = None
 
     def update(self, gltf_data):
-        # pprint.pprint(gltf_data)
-
         skip_axis_conversion = (
             "extensionsUsed" in gltf_data
             and "BP_zup" in gltf_data["extensionsUsed"]
@@ -339,6 +337,7 @@ class Converter:
             self.load_camera(camid, gltf_cam)
 
         self.uses_mesh_quantization = False
+        self.gltf_data = gltf_data
         if "extensionsRequired" in gltf_data and "KHR_mesh_quantization" in gltf_data["extensionsRequired"]:
             self.uses_mesh_quantization = True
 
@@ -377,7 +376,17 @@ class Converter:
                 # If (KHR) mesh quantization is used, the scale components may be too small for panda3d
                 # so we keep the scale at 1.0 here and scale the vertices later (see add_node)
                 if "scale" in gltf_node and not self.uses_mesh_quantization:
-                    scale_mat = LVector3(*gltf_node["scale"]) 
+                    scale = gltf_node["scale"]
+                    if "original_scale" not in gltf_node and scale[0] < self._MIN_SCALE_THRESHOLD or scale[1] < self._MIN_SCALE_THRESHOLD or scale[2] < self._MIN_SCALE_THRESHOLD:
+                        gltf_node["original_scale"] = [scale[0], scale[1], scale[2]]
+                        scale_mat = LVector3( 
+                            1 if scale[0] < self._MIN_SCALE_THRESHOLD else scale[0],
+                            1 if scale[1] < self._MIN_SCALE_THRESHOLD else scale[1],
+                            1 if scale[2] < self._MIN_SCALE_THRESHOLD else scale[2],
+                        )
+                    else:
+                        scale_mat = LVector3(*scale) 
+
                     gltf_mat.setScaleMat(scale_mat)
 
                 if "rotation" in gltf_node:
@@ -420,8 +429,6 @@ class Converter:
                 print("Could not find node with index: {}".format(nodeid))
                 return
             
-            print(gltf_node)
-
             skinid = self.skeletons.get(nodeid, None)
             charinfo = self.characters.get(skinid, None)
             scene_extras = get_extras(gltf_scene)
@@ -446,8 +453,17 @@ class Converter:
                 if nodeid in scene_extras["hidden_nodes"]:
                     panda_node = panda_node.make_copy()
 
-            def scale_geom(geom, scale):
-                """ Scales each vertex in the geometry by the scale components"""
+            def scale_mesh_geometry(geom, scale):
+                """ Scales each vertex in the geometry by the scale components
+
+                    When KHR_mesh_quantization is used, the scale of the node transform may cause singularities due to the scale being set to very small values
+                    to transform integer components to float values in the range [-1.0, 1.0]. 
+                    
+                    To prevent this, the node transform scale from the GLB is ignored in get_node_transform (i.e. scale is set to (1,1,1)). 
+                    The node transform scale is then applied to the vertices by scale_mesh_geometry instead (similar to "Apply Scale" in Blender).
+
+                    (see https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_mesh_quantization/README.md)
+                """
                 original_vertex_data = geom.get_vertex_data()
                 new_vertex_data = original_vertex_data.replace_column(
                     InternalName.get_vertex(), 3, GeomEnums.NT_float32, GeomEnums.C_point
@@ -476,16 +492,35 @@ class Converter:
                 gltf_mesh = gltf_data["meshes"][meshid]
                 mesh = self.meshes[meshid]
 
-                # TODO: fix issue with reused meshes already being scaled (the original should simply be copied and scaled each time _if_possible)
                 if self.uses_mesh_quantization and not "already_scaled" in gltf_mesh:
-
+                    # If KHR_mesh_quantization is used, the node scale components
+                    # are ignored in get_node_transform (defaulting the scale to (1,1,1)).
+                    # Here, we apply the scale to the mesh geometry instead which avoids causing a singularity with small
+                    # scale values when creating the node transfom in get_node_transform.
                     scale = gltf_node["scale"]
                     for geom_index in range( mesh.getNumGeoms() ):
                         geom = mesh.modifyGeom(geom_index) 
-                        scale_geom(geom, scale)
+                        scale_mesh_geometry(geom, scale)
 
+                    # Set the flag in case the mesh geometry is shared with other meshes to not apply the scale _again_.
                     gltf_mesh["already_scaled"] = True
 
+                elif "original_scale" in gltf_node and not "already_scaled" in gltf_mesh:
+                    # If we detect that at least one node scale component is below a minimum threshold, those components
+                    # are set to 1 in get_node_transform and (all) the original components are written to the "original_scale" 
+                    # attribute which is then used here to rescale the mesh geometry. 
+                    # Only the components below the threshold affect the mesh geometry (the assumption is that this should work for
+                    # non-uniform scales).
+                    # As with small scales due to KHR_mesh_quantization, this avoids causing a singularity when creating the node
+                    # transform in get_node_transform.
+                    scale = gltf_node["original_scale"]
+                    for geom_index in range( mesh.getNumGeoms() ):
+                        geom = mesh.modifyGeom(geom_index) 
+                        scale_mesh_geometry(geom, scale)
+
+                    # Set the flag in case the mesh geometry is shared with other meshes to not apply the scale _again_.
+                    gltf_mesh["already_scaled"] = True
+                    
                 charinfo = None
                 if "skin" in gltf_node:
                     skinid = gltf_node["skin"]
@@ -622,10 +657,8 @@ class Converter:
 
             hidden_nodes = scene_extras.get("hidden_nodes", [])
             if nodeid in hidden_nodes:
-                # print('Hiding', np)
                 visible_recursive(np, False)
             else:
-                # print('Showing', np)
                 visible_recursive(np, True)
 
             # Check if we need to deal with negative scale values
@@ -665,7 +698,6 @@ class Converter:
 
             # Now iterate again to build the scene graph
             for nodeid in node_list:
-                print(f"node {nodeid}")
                 add_node(scene_root, gltf_scene, nodeid)
 
             if self.settings.flatten_nodes:
@@ -1007,6 +1039,30 @@ class Converter:
         if double_sided:
             state = state.set_attrib(CullFaceAttrib.make(CullFaceAttrib.MCullNone))
 
+        def get_dequantization_scale_multiplier(texcoord_numeric_type) -> float:
+            """ 
+                Returns a multiplier inverting the scale factor of the (quantized) texcoord component type 
+                that was applied to the scale component of the texture transform due to KHR_mesh_quantization.
+            """
+            # TODO: unclear if this is the correct approach, but does fix the texture coordinates for the QuantizedDuck.gltf sample
+            # https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_mesh_quantization/README.md#encoding-quantized-data
+            # Numeric Type:         accessor.componentType	    int-to-float	                    float-to-int
+            # GeomEnums.NT_int8     5120 (BYTE)	                f = max(c / 127.0, -1.0)	        c = round(f * 127.0)
+            # GeomEnums.NT_uint8    5121 (UNSIGNED_BYTE)	    f = c / 255.0	                    c = round(f * 255.0)
+            # GeomEnums.NT_int16    5122 (SHORT)	            f = max(c / 32767.0, -1.0)	        c = round(f * 32767.0)
+            # GeomEnums.NT_uint16   5123 (UNSIGNED_SHORT)	    f = c / 65535.0	                    c = round(f * 65535.0)
+
+            if texcoord_numeric_type == GeomEnums.NT_int8: 
+                return 127.0
+            elif texcoord_numeric_type == GeomEnums.NT_uint8: 
+                return 255.0
+            elif texcoord_numeric_type == GeomEnums.NT_int16: 
+                return 32767.0
+            elif texcoord_numeric_type == GeomEnums.NT_uint16: 
+                return 65535.0
+            else:
+                raise ValueError("Unexpected numeric type for quantized texcoords")
+
         # Setup textures
         tex_attrib = TextureAttrib.make()
         tex_mat_attrib = None
@@ -1036,13 +1092,49 @@ class Converter:
                 # texture, whereas Panda uses the lower-left corner.
                 mat = Mat3()
                 scale = transform_ext.get("scale")
+
+                # If KHR_mesh_quantization is used, assume the texture coordinates are quantized
+                if self.uses_mesh_quantization:
+                    texcoord_numeric_type = None
+
+                    # This is kinda nasty, but the intent is to get the numeric type of the first texture coordinate array 
+                    # for a mesh that uses the current material. The numeric type is used to remove the dequantization transforms
+                    # scale component from the the texture transform since the texture coordinates are scaled instead.
+                    #
+                    # It is assumed all texture coordinate arrays using the same material has the same numeric type.
+                    for mesh in self.gltf_data["meshes"]:
+                        if "primitives" not in mesh:
+                            continue
+
+                        for primitive in mesh["primitives"]:
+                            if "material" not in primitive:
+                                continue
+                            if primitive["material"] != matid:
+                                continue
+                            
+                            if "attributes" not in primitive:
+                                continue
+                            attribute_name = f"TEXCOORD_{texstage.get_texcoord_name().basename}"
+                            if attribute_name not in primitive["attributes"]:
+                                continue
+                            texcoord_index = primitive["attributes"][attribute_name]
+                            texcoord_accessor = self.gltf_data["accessors"][texcoord_index]
+                            texcoord_numeric_type = self._COMPONENT_TYPE_MAP[ texcoord_accessor["componentType"] ]
+                            break
+
+                    if texcoord_numeric_type == None:
+                        raise RuntimeError(f"Expected a texcoord accessor for {texstage.get_texcoord_name()}")
+
+                    multiplier = get_dequantization_scale_multiplier(texcoord_numeric_type)
+                    scale = [ x * multiplier for x in scale ]
+
                 if scale:
                     mat *= (
                         Mat3.translate_mat(0, -1)
                         * Mat3.scale_mat(scale[0], scale[1])
                         * Mat3.translate_mat(0, 1)
                     )
-
+                
                 rot = transform_ext.get("rotation")
                 if rot:
                     mat *= (
@@ -1333,6 +1425,8 @@ class Converter:
         
         quantized_normals = False
         quantized_normal_type = None
+        quantized_tex_coords = False
+        quantized_tex_coords_info = {}
         for arr in reg_format.get_arrays():
             for column in arr.get_columns():
                 column_name = column.get_name()
@@ -1351,7 +1445,7 @@ class Converter:
                     varray.add_column(
                         column_name,
                         column.get_num_components(),
-                        GeomEnums.NT_float32,
+                        GeomEnums.NT_float32, # Force the data to be stored as floats before dequantization (see getNode)
                         GeomEnums.C_point,
                     )
                 elif( column_name == InternalName.get_normal()):
@@ -1364,6 +1458,17 @@ class Converter:
                         GeomEnums.NT_float32,
                         GeomEnums.C_normal,
                     )
+                elif( column_name.parent == InternalName.get_texcoord()):
+                    # TODO: make sure to handle all texcoord numeric types properly. If KHR_mesh_quantization is used, can all be handle the same way?
+                    # Convert texcoords to float
+                    quantized_tex_coords = column.get_numeric_type() != GeomEnums.NT_float32
+                    quantized_tex_coords_info[column_name.name] = column.get_numeric_type()
+                    varray.add_column(
+                        column_name,
+                        column.get_num_components(),
+                        GeomEnums.NT_float32,
+                        GeomEnums.C_texcoord,
+                    )
                 else:
                     varray.add_column(
                         column_name,
@@ -1374,6 +1479,7 @@ class Converter:
         
         vformat.add_array(varray_vert)
 
+        # TODO: dequantize morph target attributes (see https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_mesh_quantization/README.md)
         if is_skinned or targets:
             aspec = GeomVertexAnimationSpec()
             aspec.set_panda()
@@ -1466,11 +1572,16 @@ class Converter:
         if calc_normals:
             self.calculate_normals(geom)
         elif quantized_normals:
-            print("Dequantizing normals")
             self.dequantize_normals(geom, quantized_normal_type)
 
         if calc_tangents:
             self.calculate_tangents(geom)
+            
+        # TODO: dequantize tangents (see https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_mesh_quantization/README.md)
+
+        if quantized_tex_coords:
+            for column_name, numeric_type in quantized_tex_coords_info.items():
+                self.dequantize_texcoords(geom, column_name, numeric_type)
 
         geom.transform_vertices(self.csxform)
         geom_node.add_geom(geom, mat)
@@ -1509,7 +1620,7 @@ class Converter:
 
     def dequantize_normals(self, geom, normal_numeric_type):
         original_vertex_data = geom.get_vertex_data()
-        print(original_vertex_data)
+
         new_vertex_data = original_vertex_data.replace_column(
             InternalName.get_normal(), 3, GeomEnums.NT_float32, GeomEnums.C_normal
         )
@@ -1540,15 +1651,12 @@ class Converter:
 
         while not vertex_reader.is_at_end():
             original_vertex = read_vertex()
-            #print("Vertex: ", original_vertex)
-
             dequantized_normal = LVector3(
                 decode_quantization( original_vertex[0] ),
                 decode_quantization( original_vertex[1] ),
                 decode_quantization( original_vertex[2] )
             )
-            dequantized_normal.normalize()
-            #print("Decoded vertex: ", decoded_vertex)
+            #dequantized_normal.normalize() # It doesn't hurt to normalize again.
             write_vertex(dequantized_normal)
 
         geom.set_vertex_data(new_vertex_data)
@@ -1621,16 +1729,55 @@ class Converter:
 
         geom.set_vertex_data(gvd)
 
+    def dequantize_texcoords(self, geom, texcoord_colum_name, texcoord_numeric_type):
+        original_vertex_data = geom.get_vertex_data()
+
+        new_vertex_data = original_vertex_data.replace_column(
+            texcoord_colum_name, 2, GeomEnums.NT_float32, GeomEnums.C_texcoord
+        )
+        
+        # https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_mesh_quantization/README.md#encoding-quantized-data
+        # Numeric Type:         accessor.componentType	    int-to-float	                    float-to-int
+        # GeomEnums.NT_int8     5120 (BYTE)	                f = max(c / 127.0, -1.0)	        c = round(f * 127.0)
+        # GeomEnums.NT_uint8    5121 (UNSIGNED_BYTE)	    f = c / 255.0	                    c = round(f * 255.0)
+        # GeomEnums.NT_int16    5122 (SHORT)	            f = max(c / 32767.0, -1.0)	        c = round(f * 32767.0)
+        # GeomEnums.NT_uint16   5123 (UNSIGNED_SHORT)	    f = c / 65535.0	                    c = round(f * 65535.0)
+
+        if texcoord_numeric_type == GeomEnums.NT_int8: 
+            decode_quantization = lambda c: max( c / 127.0, -1.0 )
+        elif texcoord_numeric_type == GeomEnums.NT_uint8: 
+            decode_quantization = lambda c: c / 255.0
+        elif texcoord_numeric_type == GeomEnums.NT_int16: 
+            decode_quantization = lambda c: max( c / 32767.0, -1.0 )
+        elif texcoord_numeric_type == GeomEnums.NT_uint16: 
+            decode_quantization = lambda c: c / 65535.0
+        else:
+            raise ValueError("Unexpected numeric type for texcoords")
+        
+        vertex_reader = GeomVertexReader(original_vertex_data, texcoord_colum_name)
+        new_vertex_writer = GeomVertexWriter(new_vertex_data, texcoord_colum_name)
+
+        read_vertex = vertex_reader.get_data2
+        write_vertex = new_vertex_writer.set_data2
+
+        while not vertex_reader.is_at_end():
+            original_vertex = read_vertex()
+            dequantized_texcoord = LVector2(
+                decode_quantization( original_vertex[0] ),
+                decode_quantization( original_vertex[1] ),
+            )
+            write_vertex(dequantized_texcoord)
+
+        geom.set_vertex_data(new_vertex_data)
+
     def load_mesh(self, meshid, gltf_mesh, gltf_data):
         mesh_name = gltf_mesh.get("name", "mesh" + str(meshid))
         node = self.meshes.get(meshid, GeomNode(mesh_name))
-        print(f"loading mesh {meshid}")
         # Clear any existing mesh data
         node.remove_all_geoms()
 
         # Load primitives
         for gltf_primitive in gltf_mesh["primitives"]:
-            print("loading primitive")
             self.load_primitive(node, gltf_primitive, gltf_mesh, gltf_data)
 
         # Save mesh
